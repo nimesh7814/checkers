@@ -1,0 +1,494 @@
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import PlayerAvatar from '@/components/PlayerAvatar';
+import CountryFlag from '@/components/CountryFlag';
+import { AIDifficulty, BoardTheme, BoardSize, PieceColor, User } from '@/types/game';
+import {
+  Crown, Search, LogOut, Monitor, Users, Settings, Cpu, Swords,
+  Palette, History, UserCircle, Trophy, Award,
+} from 'lucide-react';
+import boardClassic from '@/assets/board-classic.jpg';
+import boardWooden from '@/assets/board-wooden.jpg';
+import boardMetal from '@/assets/board-metal.jpg';
+
+const boardThemeImages: Record<BoardTheme, string> = {
+  classic: boardClassic,
+  wooden: boardWooden,
+  metal: boardMetal,
+};
+
+// Mock online players
+const mockPlayers: User[] = [
+  { id: '1', username: 'Grandmaster88', email: '', firstName: 'Alex', lastName: 'K', avatar: null, country: 'Russia', countryCode: 'RU', isOnline: true, stats: { gamesPlayed: 142, wins: 98, losses: 32, draws: 12, winRate: 69 }, preferences: { boardTheme: 'classic', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
+  { id: '2', username: 'DraughtsKing', email: '', firstName: 'Jan', lastName: 'V', avatar: null, country: 'Netherlands', countryCode: 'NL', isOnline: true, stats: { gamesPlayed: 87, wins: 52, losses: 25, draws: 10, winRate: 60 }, preferences: { boardTheme: 'wooden', checkerColor: 'black', soundEnabled: true, animationsEnabled: true } },
+  { id: '3', username: 'CheckersPro', email: '', firstName: 'Marie', lastName: 'D', avatar: null, country: 'France', countryCode: 'FR', isOnline: false, stats: { gamesPlayed: 200, wins: 150, losses: 30, draws: 20, winRate: 75 }, preferences: { boardTheme: 'metal', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
+  { id: '4', username: 'TacticalMind', email: '', firstName: 'Wei', lastName: 'L', avatar: null, country: 'China', countryCode: 'CN', isOnline: true, stats: { gamesPlayed: 65, wins: 40, losses: 20, draws: 5, winRate: 62 }, preferences: { boardTheme: 'classic', checkerColor: 'black', soundEnabled: true, animationsEnabled: true } },
+  { id: '5', username: 'BoardWizard', email: '', firstName: 'Emma', lastName: 'S', avatar: null, country: 'Sweden', countryCode: 'SE', isOnline: false, stats: { gamesPlayed: 45, wins: 20, losses: 15, draws: 10, winRate: 44 }, preferences: { boardTheme: 'wooden', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
+  { id: '6', username: 'StrategyX', email: '', firstName: 'Carlos', lastName: 'M', avatar: null, country: 'Brazil', countryCode: 'BR', isOnline: true, stats: { gamesPlayed: 110, wins: 70, losses: 30, draws: 10, winRate: 64 }, preferences: { boardTheme: 'classic', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
+];
+
+const Dashboard: React.FC = () => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [search, setSearch] = useState('');
+  const [playerSearch, setPlayerSearch] = useState('');
+  const [showGameSetup, setShowGameSetup] = useState<'ai' | 'multi' | null>(null);
+  const [aiDifficulty, setAiDifficulty] = useState<AIDifficulty>('moderate');
+  const [selectedColor, setSelectedColor] = useState<PieceColor>('white');
+  const [selectedTheme, setSelectedTheme] = useState<BoardTheme>('classic');
+  const [selectedSize, setSelectedSize] = useState<BoardSize>(12);
+
+  if (!user) return null;
+
+  const filtered = mockPlayers.filter(p =>
+    p.username.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const multiFiltered = mockPlayers.filter(p =>
+    p.username.toLowerCase().includes(playerSearch.toLowerCase())
+  );
+
+  const startAIGame = () => {
+    navigate('/game', {
+      state: { gameType: 'ai', aiDifficulty, playerColor: selectedColor, boardTheme: selectedTheme, boardSize: selectedSize },
+    });
+  };
+
+  const userCountryCode = user.countryCode;
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <header className="border-b border-border bg-card">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
+              <Crown className="w-5 h-5 text-primary-foreground" />
+            </div>
+            <span className="font-bold text-foreground tracking-tight">Checkers Arena</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <PlayerAvatar username={user.username} src={user.avatar} size={32} />
+              <span className="text-sm font-medium text-foreground hidden sm:inline">{user.username}</span>
+              <CountryFlag code={userCountryCode} className="h-4 w-6" title={user.country} />
+            </div>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/profile')}>
+              <UserCircle className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/leaderboard')}>
+              <Trophy className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/achievements')}>
+              <Award className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/history')}>
+              <History className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => navigate('/settings')}>
+              <Settings className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => { logout(); navigate('/'); }}>
+              <LogOut className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Left: Play Options */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { label: 'Played', value: user.stats.gamesPlayed },
+                { label: 'Wins', value: user.stats.wins },
+                { label: 'Losses', value: user.stats.losses },
+                { label: 'Win Rate', value: `${user.stats.winRate}%` },
+              ].map(s => (
+                <div key={s.label} className="surface-card p-4 text-center">
+                  <div className="text-2xl font-bold text-foreground tabular-nums">{s.value}</div>
+                  <div className="text-xs text-muted-foreground mt-1">{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Play Buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => setShowGameSetup(prev => prev === 'ai' ? null : 'ai')}
+                className={`surface-card p-6 text-left group transition-colors border-2 ${
+                  showGameSetup === 'ai' ? 'border-primary bg-primary/5' : 'border-transparent hover:border-primary/40'
+                }`}
+              >
+                <div className={`w-12 h-12 rounded-lg flex items-center justify-center mb-4 transition-colors ${
+                  showGameSetup === 'ai' ? 'bg-primary/20' : 'bg-primary/10 group-hover:bg-primary/20'
+                }`}>
+                  <Cpu className="w-6 h-6 text-primary" />
+                </div>
+                <h3 className="font-semibold text-foreground mb-1">Play vs Computer</h3>
+                <p className="text-sm text-muted-foreground">Challenge the AI at Easy, Moderate, or Hard</p>
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => setShowGameSetup(prev => prev === 'multi' ? null : 'multi')}
+                className={`surface-card p-6 text-left group transition-colors border-2 ${
+                  showGameSetup === 'multi' ? 'border-primary bg-primary/5' : 'border-transparent hover:border-primary/40'
+                }`}
+              >
+                <div className={`w-12 h-12 rounded-lg flex items-center justify-center mb-4 transition-colors ${
+                  showGameSetup === 'multi' ? 'bg-primary/20' : 'bg-primary/10 group-hover:bg-primary/20'
+                }`}>
+                  <Swords className="w-6 h-6 text-primary" />
+                </div>
+                <h3 className="font-semibold text-foreground mb-1">Play vs Player</h3>
+                <p className="text-sm text-muted-foreground">Challenge online opponents in real time</p>
+              </motion.button>
+            </div>
+
+            {/* AI Game Setup Panel */}
+            {showGameSetup === 'ai' && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="surface-card p-6 space-y-5"
+              >
+                <h3 className="font-semibold text-foreground flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-primary" /> Game Setup
+                </h3>
+
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Difficulty</label>
+                  <div className="flex gap-2">
+                    {(['easy', 'moderate', 'hard'] as const).map(d => (
+                      <button
+                        key={d}
+                        onClick={() => setAiDifficulty(d)}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                          aiDifficulty === d
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                        }`}
+                      >
+                        {d.charAt(0).toUpperCase() + d.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Board Size</label>
+                  <div className="flex gap-2">
+                    {([{ size: 8 as const, label: '8 × 8' }, { size: 12 as const, label: '12 × 12' }]).map(b => (
+                      <button
+                        key={b.size}
+                        onClick={() => setSelectedSize(b.size)}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                          selectedSize === b.size
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                        }`}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Your Color</label>
+                  <div className="flex gap-2">
+                    {(['white', 'black'] as const).map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSelectedColor(c)}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                          selectedColor === c
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded-full ${c === 'white' ? 'bg-foreground' : 'bg-background border border-border'}`} />
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Board Theme</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      { id: 'classic' as const, label: 'Classic' },
+                      { id: 'wooden' as const, label: 'Wooden' },
+                      { id: 'metal' as const, label: 'Metal' },
+                    ]).map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedTheme(t.id)}
+                        className={`rounded-lg overflow-hidden transition-all border-2 ${
+                          selectedTheme === t.id
+                            ? 'border-primary ring-2 ring-primary/30'
+                            : 'border-border hover:border-primary/40'
+                        }`}
+                      >
+                        <img
+                          src={boardThemeImages[t.id]}
+                          alt={`${t.label} board`}
+                          className="w-full aspect-square object-cover"
+                        />
+                        <div className={`py-1.5 text-xs font-medium text-center transition-colors ${
+                          selectedTheme === t.id
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground'
+                        }`}>
+                          {t.label}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-3">
+                  <Button onClick={startAIGame} className="flex-1">
+                    Start Game
+                  </Button>
+                  <Button variant="outline" onClick={() => setShowGameSetup(null)}>
+                    Cancel
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+
+            {/* Multiplayer Setup Panel */}
+            {showGameSetup === 'multi' && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="surface-card p-6 space-y-5"
+              >
+                <h3 className="font-semibold text-foreground flex items-center gap-2">
+                  <Swords className="w-4 h-4 text-primary" /> Game Setup
+                </h3>
+
+                {/* Board Size */}
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Board Size</label>
+                  <div className="flex gap-2">
+                    {([{ size: 8 as const, label: '8 × 8' }, { size: 12 as const, label: '12 × 12' }]).map(b => (
+                      <button
+                        key={b.size}
+                        onClick={() => setSelectedSize(b.size)}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                          selectedSize === b.size
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                        }`}
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Your Color */}
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Your Color</label>
+                  <div className="flex gap-2">
+                    {(['white', 'black'] as const).map(c => (
+                      <button
+                        key={c}
+                        onClick={() => setSelectedColor(c)}
+                        className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+                          selectedColor === c
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground hover:bg-accent'
+                        }`}
+                      >
+                        <div className={`w-4 h-4 rounded-full ${c === 'white' ? 'bg-foreground' : 'bg-background border border-border'}`} />
+                        {c.charAt(0).toUpperCase() + c.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Board Theme */}
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Board Theme</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    {([
+                      { id: 'classic' as const, label: 'Classic' },
+                      { id: 'wooden' as const, label: 'Wooden' },
+                      { id: 'metal' as const, label: 'Metal' },
+                    ]).map(t => (
+                      <button
+                        key={t.id}
+                        onClick={() => setSelectedTheme(t.id)}
+                        className={`rounded-lg overflow-hidden transition-all border-2 ${
+                          selectedTheme === t.id
+                            ? 'border-primary ring-2 ring-primary/30'
+                            : 'border-border hover:border-primary/40'
+                        }`}
+                      >
+                        <img
+                          src={boardThemeImages[t.id]}
+                          alt={`${t.label} board`}
+                          className="w-full aspect-square object-cover"
+                        />
+                        <div className={`py-1.5 text-xs font-medium text-center transition-colors ${
+                          selectedTheme === t.id
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-secondary text-secondary-foreground'
+                        }`}>
+                          {t.label}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Find Opponent */}
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Find an Opponent</label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by username..."
+                      value={playerSearch}
+                      onChange={e => setPlayerSearch(e.target.value)}
+                      className="pl-9 bg-secondary border-border text-foreground"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1 max-h-64 overflow-y-auto border border-border rounded-md p-1">
+                  {multiFiltered.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">No players found</p>
+                  ) : (
+                    multiFiltered.map(player => (
+                      <div
+                        key={player.id}
+                        className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent transition-colors cursor-pointer group"
+                      >
+                        <div className="relative">
+                          <PlayerAvatar username={player.username} src={player.avatar} size={36} />
+                          <div
+                            className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
+                              player.isOnline ? 'bg-online pulse-online' : 'bg-offline'
+                            }`}
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium text-foreground truncate">{player.username}</span>
+                            <CountryFlag code={player.countryCode} className="h-3 w-5" title={player.country} />
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                              player.isOnline
+                                ? 'bg-primary/10 text-primary'
+                                : 'bg-muted text-muted-foreground'
+                            }`}>
+                              {player.isOnline ? 'Online' : 'Offline'}
+                            </span>
+                          </div>
+                          <div className="text-xs text-muted-foreground tabular-nums">
+                            {player.stats.wins}W {player.stats.losses}L · {player.stats.winRate}%
+                          </div>
+                        </div>
+                        {player.isOnline && (
+                          <Button size="sm" variant="default" className="text-xs h-7 px-3">
+                            Challenge
+                          </Button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Real-time multiplayer requires backend — coming soon!
+                </p>
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={() => setShowGameSetup(null)} className="flex-1">
+                    Cancel
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </div>
+
+          {/* Right: Online Players */}
+          <div className="surface-card p-4 h-fit">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-foreground flex items-center gap-2">
+                <Users className="w-4 h-4 text-primary" />
+                Live Arena
+              </h3>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {mockPlayers.filter(p => p.isOnline).length} online
+              </span>
+            </div>
+
+            <div className="relative mb-3">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search player..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-9 bg-secondary border-border text-foreground"
+              />
+            </div>
+
+            <div className="space-y-1 max-h-96 overflow-y-auto">
+              {filtered.map(player => {
+                return (
+                  <div
+                    key={player.id}
+                    className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent transition-colors cursor-pointer group"
+                  >
+                    <div className="relative">
+                      <PlayerAvatar username={player.username} src={player.avatar} size={36} />
+                      <div
+                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
+                          player.isOnline ? 'bg-online pulse-online' : 'bg-offline'
+                        }`}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-foreground truncate">{player.username}</span>
+                        <CountryFlag code={player.countryCode} className="h-4 w-6" title={player.country} />
+                      </div>
+                      <div className="text-xs text-muted-foreground tabular-nums">
+                        {player.stats.wins}W {player.stats.losses}L · {player.stats.winRate}%
+                      </div>
+                    </div>
+                    {player.isOnline && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                      >
+                        Challenge
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Dashboard;
