@@ -28,6 +28,7 @@ const SettingsPage: React.FC = () => {
   const [soundEnabled, setSoundEnabled] = useState(user?.preferences.soundEnabled ?? true);
   const [animationsEnabled, setAnimationsEnabled] = useState(user?.preferences.animationsEnabled ?? true);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   if (!user) { navigate('/'); return null; }
 
@@ -39,19 +40,24 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSave = () => {
-    updateProfile({
-      avatar,
-      firstName,
-      lastName,
-      email,
-      birthday,
-      country,
-      countryCode,
-      preferences: { boardTheme, checkerColor, soundEnabled, animationsEnabled },
-    });
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateProfile({
+        avatar,
+        firstName,
+        lastName,
+        email,
+        birthday,
+        country,
+        countryCode,
+        preferences: { boardTheme, checkerColor, soundEnabled, animationsEnabled },
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -192,8 +198,8 @@ const SettingsPage: React.FC = () => {
           </div>
         </section>
 
-        <Button onClick={handleSave} className="w-full">
-          <Save className="w-4 h-4 mr-2" /> {saved ? 'Saved!' : 'Save Settings'}
+        <Button onClick={handleSave} className="w-full" disabled={saving}>
+          <Save className="w-4 h-4 mr-2" /> {saving ? 'Saving…' : saved ? 'Saved!' : 'Save Settings'}
         </Button>
       </div>
     </div>

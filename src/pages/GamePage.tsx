@@ -2,22 +2,44 @@ import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
+import { io, Socket } from 'socket.io-client';
 import CheckerBoard from '@/components/CheckerBoard';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import { Button } from '@/components/ui/button';
+import { apiFetch, getToken } from '@/lib/api';
 import {
   createInitialBoard, getAllValidMoves, getMovesForPiece, getCaptureMovesForPiece,
   executeMove, checkGameOver, moveToNotation, getAIMove, getAIMoveFromMoves,
 } from '@/lib/checkers';
 import { saveMatch } from '@/lib/matchHistory';
-import { Piece, Position, Move, PieceColor, BoardTheme, BoardSize, AIDifficulty, MoveRecord, MatchRecord } from '@/types/game';
+import { Piece, Position, Move, PieceColor, BoardTheme, BoardSize, AIDifficulty, MoveRecord, MatchRecord, User } from '@/types/game';
 import CountryFlag from '@/components/CountryFlag';
 import { Crown, Flag, ArrowLeft, Handshake, RotateCcw } from 'lucide-react';
 import { playMoveSound, playCaptureSound, playKingSound, playGameOverSound, setSoundEnabled } from '@/lib/sounds';
 import { useToast } from '@/hooks/use-toast';
 
+interface MultiplayerMatchState {
+  id: string;
+  status: 'active' | 'finished' | 'cancelled';
+  winnerColor: PieceColor | null;
+  winnerReason: 'timeout' | 'resign' | 'completed' | null;
+  opponentDisconnectedAt: string | null;
+  opponentDisconnectDeadlineAt: string | null;
+}
+
+interface SyncedGameState {
+  board: (Piece | null)[][];
+  currentTurn: PieceColor;
+  moveHistory: string[];
+  capturedWhite: number;
+  capturedBlack: number;
+  gameOver: boolean;
+  winner: PieceColor | 'draw' | null;
+  forcedContinuationPiece: Position | null;
+}
+
 const GamePage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, updateProfile } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -27,6 +49,8 @@ const GamePage: React.FC = () => {
     playerColor: PieceColor;
     boardTheme: BoardTheme;
     boardSize?: BoardSize;
+    matchId?: string;
+    opponent?: User;
   } | null;
 
   const gameType = state?.gameType ?? 'ai';
@@ -34,6 +58,9 @@ const GamePage: React.FC = () => {
   const playerColor = state?.playerColor ?? 'white';
   const boardTheme = state?.boardTheme ?? 'classic';
   const boardSize: BoardSize = state?.boardSize ?? 12;
+  const matchId = state?.matchId ?? null;
+  const opponent = state?.opponent ?? null;
+  const isMultiplayer = gameType === 'multiplayer';
   const aiColor: PieceColor = playerColor === 'white' ? 'black' : 'white';
 
   const [board, setBoard] = useState(() => createInitialBoard(boardSize));
@@ -50,6 +77,27 @@ const GamePage: React.FC = () => {
   const [redirecting, setRedirecting] = useState(false);
   const [matchSaved, setMatchSaved] = useState(false);
   const gameStartTime = useRef(Date.now());
+  const timeoutWinnerAppliedRef = useRef(false);
+  const disconnectSentRef = useRef(false);
+  const lastOpponentDisconnectedAtRef = useRef<string | null>(null);
+  const syncRevisionRef = useRef(0);
+  const hasLoadedRemoteStateRef = useRef(false);
+  const skipNextSyncPushRef = useRef(false);
+  const socketRef = useRef<Socket | null>(null);
+
+  const applySyncedGameState = useCallback((nextState: SyncedGameState) => {
+    skipNextSyncPushRef.current = true;
+    setBoard(nextState.board);
+    setCurrentTurn(nextState.currentTurn);
+    setMoveHistory(nextState.moveHistory);
+    setCapturedWhite(nextState.capturedWhite);
+    setCapturedBlack(nextState.capturedBlack);
+    setGameOver(nextState.gameOver);
+    setWinner(nextState.winner);
+    setForcedContinuationPiece(nextState.forcedContinuationPiece);
+    setSelectedPiece(null);
+    setValidMoves([]);
+  }, []);
 
   // Sync sound preference
   useEffect(() => {
@@ -60,8 +108,271 @@ const GamePage: React.FC = () => {
     if (!state || !user) {
       setRedirecting(true);
       navigate('/dashboard');
+      return;
     }
-  }, [state, user, navigate]);
+
+    if (isMultiplayer && !matchId) {
+      setRedirecting(true);
+      toast({
+        title: 'Match is unavailable',
+        description: 'Open or resume multiplayer matches from the dashboard.',
+        duration: 3500,
+      });
+      navigate('/dashboard');
+    }
+  }, [isMultiplayer, matchId, navigate, state, toast, user]);
+
+  const applyServerMatchState = useCallback((serverMatch: MultiplayerMatchState) => {
+    if (serverMatch.status === 'finished' && serverMatch.winnerColor && !timeoutWinnerAppliedRef.current) {
+      timeoutWinnerAppliedRef.current = true;
+      setGameOver(true);
+      setWinner(serverMatch.winnerColor);
+
+      if (serverMatch.winnerReason === 'timeout') {
+        toast({
+          title: serverMatch.winnerColor === playerColor ? 'You win by timeout' : 'You lost by timeout',
+          description: serverMatch.winnerColor === playerColor
+            ? 'Opponent did not return within 10 minutes.'
+            : 'You did not return within 10 minutes.',
+          duration: 4500,
+        });
+      }
+      return;
+    }
+
+    const opponentDisconnectedAt = serverMatch.opponentDisconnectedAt;
+    if (opponentDisconnectedAt && opponentDisconnectedAt !== lastOpponentDisconnectedAtRef.current) {
+      lastOpponentDisconnectedAtRef.current = opponentDisconnectedAt;
+      toast({
+        title: 'Opponent disconnected',
+        description: 'If they do not rejoin within 10 minutes, you win automatically.',
+        duration: 4000,
+      });
+      return;
+    }
+
+    if (!opponentDisconnectedAt) {
+      lastOpponentDisconnectedAtRef.current = null;
+    }
+  }, [playerColor, toast]);
+
+  useEffect(() => {
+    if (!user || !isMultiplayer || !matchId) {
+      return;
+    }
+
+    disconnectSentRef.current = false;
+    timeoutWinnerAppliedRef.current = false;
+
+    let active = true;
+    const syncMatchState = async () => {
+      try {
+        const { match } = await apiFetch<{ match: MultiplayerMatchState }>(`/matches/${matchId}`);
+        if (!active) return;
+        applyServerMatchState(match);
+
+        const stateData = await apiFetch<{
+          stateRevision: number;
+          gameState: SyncedGameState | null;
+        }>(`/matches/${matchId}/state`);
+        if (!active) return;
+
+        if (stateData.stateRevision > syncRevisionRef.current) {
+          syncRevisionRef.current = stateData.stateRevision;
+          if (stateData.gameState) {
+            applySyncedGameState(stateData.gameState);
+          }
+        }
+      } catch {
+        // Ignore transient polling errors
+      }
+    };
+
+    apiFetch<{ match: MultiplayerMatchState }>(`/matches/${matchId}/rejoin`, { method: 'POST' })
+      .then(({ match }) => {
+        if (!active) return;
+        applyServerMatchState(match);
+
+        void apiFetch<{
+          stateRevision: number;
+          gameState: SyncedGameState | null;
+        }>(`/matches/${matchId}/state`)
+          .then(stateData => {
+            if (!active) return;
+            syncRevisionRef.current = stateData.stateRevision;
+            hasLoadedRemoteStateRef.current = true;
+            if (stateData.gameState) {
+              applySyncedGameState(stateData.gameState);
+            }
+          })
+          .catch(() => {
+            hasLoadedRemoteStateRef.current = true;
+          });
+      })
+      .catch(() => {
+        if (!active) return;
+        toast({
+          title: 'Could not join match',
+          description: 'This match may no longer be active.',
+          duration: 3500,
+        });
+        setRedirecting(true);
+        navigate('/dashboard');
+      });
+
+    const interval = setInterval(() => {
+      void syncMatchState();
+    }, 15000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [applyServerMatchState, isMultiplayer, matchId, navigate, toast, user]);
+
+  useEffect(() => {
+    if (!user || !isMultiplayer || !matchId) {
+      return;
+    }
+
+    const token = getToken();
+    if (!token) {
+      return;
+    }
+
+    const socket = io({
+      path: '/socket.io',
+      auth: { token },
+      transports: ['websocket', 'polling'],
+    });
+    socketRef.current = socket;
+
+    const joinRoom = () => {
+      socket.emit('join_match', matchId);
+    };
+
+    socket.on('connect', joinRoom);
+    if (socket.connected) {
+      joinRoom();
+    }
+
+    socket.on('match_state', (payload: { stateRevision?: number; gameState?: SyncedGameState | null }) => {
+      if (typeof payload.stateRevision !== 'number') {
+        return;
+      }
+
+      if (payload.stateRevision <= syncRevisionRef.current) {
+        return;
+      }
+
+      syncRevisionRef.current = payload.stateRevision;
+      if (payload.gameState) {
+        applySyncedGameState(payload.gameState);
+      }
+    });
+
+    socket.on('match_meta', () => {
+      void apiFetch<{ match: MultiplayerMatchState }>(`/matches/${matchId}`)
+        .then(({ match }) => {
+          applyServerMatchState(match);
+        })
+        .catch(() => {
+          // Ignore transient realtime metadata fetch errors.
+        });
+    });
+
+    return () => {
+      socket.emit('leave_match', matchId);
+      socket.off('connect', joinRoom);
+      socket.removeAllListeners('match_state');
+      socket.removeAllListeners('match_meta');
+      socket.disconnect();
+      socketRef.current = null;
+    };
+  }, [applyServerMatchState, applySyncedGameState, isMultiplayer, matchId, user]);
+
+  useEffect(() => {
+    if (!user || !isMultiplayer || !matchId || !hasLoadedRemoteStateRef.current) {
+      return;
+    }
+
+    if (skipNextSyncPushRef.current) {
+      skipNextSyncPushRef.current = false;
+      return;
+    }
+
+    const statePayload: SyncedGameState = {
+      board,
+      currentTurn,
+      moveHistory,
+      capturedWhite,
+      capturedBlack,
+      gameOver,
+      winner,
+      forcedContinuationPiece,
+    };
+
+    void apiFetch<{ stateRevision: number }>(`/matches/${matchId}/state`, {
+      method: 'PUT',
+      body: JSON.stringify({ state: statePayload }),
+    })
+      .then(data => {
+        syncRevisionRef.current = data.stateRevision;
+      })
+      .catch(() => {
+        // Ignore transient sync write failures; next polling cycle will reconcile.
+      });
+  }, [
+    board,
+    capturedBlack,
+    capturedWhite,
+    currentTurn,
+    forcedContinuationPiece,
+    gameOver,
+    isMultiplayer,
+    matchId,
+    moveHistory,
+    user,
+    winner,
+  ]);
+
+  useEffect(() => {
+    if (!user || !isMultiplayer || !matchId) {
+      return;
+    }
+
+    const baseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api';
+    const sendDisconnectKeepalive = () => {
+      if (gameOver || disconnectSentRef.current) {
+        return;
+      }
+
+      const token = getToken();
+      if (!token) {
+        return;
+      }
+
+      disconnectSentRef.current = true;
+      void fetch(`${baseUrl}/matches/${matchId}/disconnect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        keepalive: true,
+      });
+    };
+
+    window.addEventListener('beforeunload', sendDisconnectKeepalive);
+
+    return () => {
+      window.removeEventListener('beforeunload', sendDisconnectKeepalive);
+      if (!gameOver && !disconnectSentRef.current) {
+        disconnectSentRef.current = true;
+        void apiFetch(`/matches/${matchId}/disconnect`, { method: 'POST' }).catch(() => {});
+      }
+    };
+  }, [gameOver, isMultiplayer, matchId, user]);
 
   // Timer
   useEffect(() => {
@@ -87,6 +398,9 @@ const GamePage: React.FC = () => {
       const playerCaptured = playerColor === 'white' ? capturedBlack : capturedWhite;
       const opponentCaptured = playerColor === 'white' ? capturedWhite : capturedBlack;
       const result: 'win' | 'loss' | 'draw' = winner === 'draw' ? 'draw' : winner === playerColor ? 'win' : 'loss';
+      const opponentName = gameType === 'ai'
+        ? `AI (${aiDifficulty})`
+        : opponent?.username ?? 'Opponent';
       const match: MatchRecord = {
         id: crypto.randomUUID(),
         date: new Date().toISOString(),
@@ -94,7 +408,7 @@ const GamePage: React.FC = () => {
         boardTheme,
         playerColor,
         playerUsername: user.username,
-        opponentName: gameType === 'ai' ? `AI (${aiDifficulty})` : 'Opponent',
+        opponentName,
         aiDifficulty: gameType === 'ai' ? aiDifficulty : undefined,
         moves: moveHistory,
         result,
@@ -104,8 +418,20 @@ const GamePage: React.FC = () => {
         capturedByOpponent: opponentCaptured,
       };
       saveMatch(user.id, match);
+
+      // Persist updated stats to PostgreSQL
+      const newStats = {
+        gamesPlayed: user.stats.gamesPlayed + 1,
+        wins:   user.stats.wins   + (result === 'win'  ? 1 : 0),
+        losses: user.stats.losses + (result === 'loss' ? 1 : 0),
+        draws:  user.stats.draws  + (result === 'draw' ? 1 : 0),
+      };
+      const winRate = newStats.gamesPlayed > 0
+        ? Math.round((newStats.wins / newStats.gamesPlayed) * 100)
+        : 0;
+      updateProfile({ stats: { ...newStats, winRate } }).catch(console.error);
     }
-  }, [gameOver, matchSaved, user, winner]);
+  }, [gameOver, matchSaved, user, winner, opponent]);
 
   const applyMove = useCallback((move: Move) => {
     const newBoard = executeMove(board, move);
@@ -308,6 +634,7 @@ const GamePage: React.FC = () => {
   const handleSquareClick = useCallback((row: number, col: number) => {
     if (gameOver) return;
     if (gameType === 'ai' && currentTurn === aiColor) return;
+    if (isMultiplayer && currentTurn !== playerColor) return;
 
     const piece = board[row][col];
 
@@ -372,7 +699,7 @@ const GamePage: React.FC = () => {
     if (hasMandatoryCapture) {
       revealMandatoryCapture();
     }
-  }, [board, selectedPiece, validMoves, currentTurn, gameOver, gameType, aiColor, applyMove, hasMandatoryCapture, revealMandatoryCapture, trySelectPiece]);
+  }, [board, selectedPiece, validMoves, currentTurn, gameOver, gameType, aiColor, applyMove, hasMandatoryCapture, revealMandatoryCapture, trySelectPiece, isMultiplayer, playerColor]);
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
@@ -457,9 +784,11 @@ const GamePage: React.FC = () => {
           {/* Opponent card - visible on mobile above board */}
           <div className="p-2 shrink-0 lg:hidden">
             <PlayerCard
-              name={gameType === 'ai' ? `AI (${aiDifficulty})` : 'Opponent'}
-              flag={gameType === 'ai' ? '🤖' : '🌍'}
-              avatar={null}
+              name={gameType === 'ai' ? `AI (${aiDifficulty})` : (opponent?.username ?? 'Player 2')}
+              flag={gameType === 'ai' ? '🤖' : opponent
+                ? <CountryFlag code={opponent.countryCode} className="h-4 w-6" title={opponent.country} />
+                : '🌍'}
+              avatar={gameType === 'ai' ? null : (opponent?.avatar ?? null)}
               color={aiColor}
               timeLeft={timer[aiColor]}
               captured={aiColor === 'white' ? capturedBlack : capturedWhite}
@@ -570,9 +899,11 @@ const GamePage: React.FC = () => {
           {/* Opponent Player Card */}
           <div className="p-2 border-b border-border">
             <PlayerCard
-              name={gameType === 'ai' ? `AI (${aiDifficulty})` : 'Opponent'}
-              flag={gameType === 'ai' ? '🤖' : '🌍'}
-              avatar={null}
+              name={gameType === 'ai' ? `AI (${aiDifficulty})` : (opponent?.username ?? 'Player 2')}
+              flag={gameType === 'ai' ? '🤖' : opponent
+                ? <CountryFlag code={opponent.countryCode} className="h-4 w-6" title={opponent.country} />
+                : '🌍'}
+              avatar={gameType === 'ai' ? null : (opponent?.avatar ?? null)}
               color={aiColor}
               timeLeft={timer[aiColor]}
               captured={aiColor === 'white' ? capturedBlack : capturedWhite}

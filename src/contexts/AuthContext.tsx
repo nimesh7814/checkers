@@ -1,13 +1,20 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
-import { User, UserPreferences } from '@/types/game';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { User } from '@/types/game';
+import { apiFetch, getToken, setToken, clearToken } from '@/lib/api';
+
+interface AuthResult {
+  success: boolean;
+  error?: string;
+}
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (username: string, password: string) => boolean;
-  register: (data: RegisterData) => boolean;
-  logout: () => void;
-  updateProfile: (updates: Partial<User>) => void;
+  loading: boolean;
+  login: (username: string, password: string) => Promise<AuthResult>;
+  register: (data: RegisterData) => Promise<AuthResult>;
+  logout: () => Promise<void>;
+  updateProfile: (updates: Partial<User>) => Promise<void>;
 }
 
 export interface RegisterData {
@@ -24,87 +31,77 @@ export interface RegisterData {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export const useAuth = () => {
+export const useAuth = (): AuthContextType => {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 };
 
-const defaultPrefs: UserPreferences = {
-  boardTheme: 'classic',
-  checkerColor: 'white',
-  soundEnabled: true,
-  animationsEnabled: true,
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('checkers_user');
-    return stored ? JSON.parse(stored) : null;
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const getUsers = (): (User & { password: string })[] => {
-    const stored = localStorage.getItem('checkers_users');
-    return stored ? JSON.parse(stored) : [];
-  };
-
-  const saveUsers = (users: (User & { password: string })[]) => {
-    localStorage.setItem('checkers_users', JSON.stringify(users));
-  };
-
-  const login = useCallback((username: string, password: string): boolean => {
-    const users = getUsers();
-    const found = users.find(u => u.username === username && u.password === password);
-    if (found) {
-      const { password: _, ...userData } = found;
-      setUser(userData);
-      localStorage.setItem('checkers_user', JSON.stringify(userData));
-      return true;
+  // On mount: restore session from stored JWT
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setLoading(false);
+      return;
     }
-    return false;
+    apiFetch<{ user: User }>('/auth/me')
+      .then(data => setUser(data.user))
+      .catch(() => clearToken())
+      .finally(() => setLoading(false));
   }, []);
 
-  const register = useCallback((data: RegisterData): boolean => {
-    const users = getUsers();
-    if (users.some(u => u.username === data.username)) return false;
-    const newUser: User & { password: string } = {
-      id: crypto.randomUUID(),
-      username: data.username,
-      email: data.email,
-      password: data.password,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      birthday: data.birthday,
-      avatar: data.avatar,
-      country: data.country,
-      countryCode: data.countryCode,
-      isOnline: true,
-      stats: { gamesPlayed: 0, wins: 0, losses: 0, draws: 0, winRate: 0 },
-      preferences: defaultPrefs,
-    };
-    saveUsers([...users, newUser]);
-    const { password: _, ...userData } = newUser;
-    setUser(userData);
-    localStorage.setItem('checkers_user', JSON.stringify(userData));
-    return true;
+  const login = useCallback(async (username: string, password: string): Promise<AuthResult> => {
+    try {
+      const data = await apiFetch<{ token: string; user: User }>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      });
+      setToken(data.token);
+      setUser(data.user);
+      return { success: true };
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : 'Login failed' };
+    }
   }, []);
 
-  const logout = useCallback(() => {
+  const register = useCallback(async (data: RegisterData): Promise<AuthResult> => {
+    try {
+      const res = await apiFetch<{ token: string; user: User }>('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      setToken(res.token);
+      setUser(res.user);
+      return { success: true };
+    } catch (err: unknown) {
+      return { success: false, error: err instanceof Error ? err.message : 'Registration failed' };
+    }
+  }, []);
+
+  const logout = useCallback(async (): Promise<void> => {
+    try {
+      await apiFetch('/auth/logout', { method: 'POST' });
+    } catch {
+      // Ignore server error – always clear local session
+    }
+    clearToken();
     setUser(null);
-    localStorage.removeItem('checkers_user');
   }, []);
 
-  const updateProfile = useCallback((updates: Partial<User>) => {
-    setUser(prev => {
-      if (!prev) return null;
-      const updated = { ...prev, ...updates };
-      localStorage.setItem('checkers_user', JSON.stringify(updated));
-      return updated;
+  const updateProfile = useCallback(async (updates: Partial<User>): Promise<void> => {
+    const data = await apiFetch<{ user: User }>('/users/me', {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
     });
+    setUser(data.user);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, register, logout, updateProfile }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, loading, login, register, logout, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

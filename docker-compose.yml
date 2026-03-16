@@ -1,0 +1,56 @@
+name: checkers
+
+services:
+  # ── PostgreSQL database ──────────────────────────────────────────────────
+  db:
+    container_name: checkers-db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       checkers
+      POSTGRES_USER:     checkers
+      POSTGRES_PASSWORD: checkers_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U checkers"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Node.js / Express backend ────────────────────────────────────────────
+  backend:
+    container_name: checkers-backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_HOST:      db
+      DB_PORT:      5432
+      DB_NAME:      checkers
+      DB_USER:      checkers
+      DB_PASSWORD:  checkers_password
+      JWT_SECRET:   "${JWT_SECRET:-change-me-in-production-please}"
+      PORT:         3001
+      CORS_ORIGIN:  "http://localhost:8036"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── React frontend served by nginx ──────────────────────────────────────
+  frontend:
+    container_name: checkers
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+    restart: unless-stopped
+    ports:
+      - "8036:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

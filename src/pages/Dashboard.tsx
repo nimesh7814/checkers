@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,9 +7,11 @@ import { Input } from '@/components/ui/input';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import CountryFlag from '@/components/CountryFlag';
 import { AIDifficulty, BoardTheme, BoardSize, PieceColor, User } from '@/types/game';
+import { apiFetch } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 import {
   Crown, Search, LogOut, Monitor, Users, Settings, Cpu, Swords,
-  Palette, History, UserCircle, Trophy, Award,
+  Palette, History, UserCircle, Trophy, Award, Bell,
 } from 'lucide-react';
 import boardClassic from '@/assets/board-classic.jpg';
 import boardWooden from '@/assets/board-wooden.jpg';
@@ -21,18 +23,46 @@ const boardThemeImages: Record<BoardTheme, string> = {
   metal: boardMetal,
 };
 
-// Mock online players
-const mockPlayers: User[] = [
-  { id: '1', username: 'Grandmaster88', email: '', firstName: 'Alex', lastName: 'K', avatar: null, country: 'Russia', countryCode: 'RU', isOnline: true, stats: { gamesPlayed: 142, wins: 98, losses: 32, draws: 12, winRate: 69 }, preferences: { boardTheme: 'classic', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
-  { id: '2', username: 'DraughtsKing', email: '', firstName: 'Jan', lastName: 'V', avatar: null, country: 'Netherlands', countryCode: 'NL', isOnline: true, stats: { gamesPlayed: 87, wins: 52, losses: 25, draws: 10, winRate: 60 }, preferences: { boardTheme: 'wooden', checkerColor: 'black', soundEnabled: true, animationsEnabled: true } },
-  { id: '3', username: 'CheckersPro', email: '', firstName: 'Marie', lastName: 'D', avatar: null, country: 'France', countryCode: 'FR', isOnline: false, stats: { gamesPlayed: 200, wins: 150, losses: 30, draws: 20, winRate: 75 }, preferences: { boardTheme: 'metal', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
-  { id: '4', username: 'TacticalMind', email: '', firstName: 'Wei', lastName: 'L', avatar: null, country: 'China', countryCode: 'CN', isOnline: true, stats: { gamesPlayed: 65, wins: 40, losses: 20, draws: 5, winRate: 62 }, preferences: { boardTheme: 'classic', checkerColor: 'black', soundEnabled: true, animationsEnabled: true } },
-  { id: '5', username: 'BoardWizard', email: '', firstName: 'Emma', lastName: 'S', avatar: null, country: 'Sweden', countryCode: 'SE', isOnline: false, stats: { gamesPlayed: 45, wins: 20, losses: 15, draws: 10, winRate: 44 }, preferences: { boardTheme: 'wooden', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
-  { id: '6', username: 'StrategyX', email: '', firstName: 'Carlos', lastName: 'M', avatar: null, country: 'Brazil', countryCode: 'BR', isOnline: true, stats: { gamesPlayed: 110, wins: 70, losses: 30, draws: 10, winRate: 64 }, preferences: { boardTheme: 'classic', checkerColor: 'white', soundEnabled: true, animationsEnabled: true } },
-];
+interface GameInvite {
+  id: string;
+  matchId: string | null;
+  fromUserId: string;
+  toUserId: string;
+  boardSize: BoardSize;
+  boardTheme: BoardTheme;
+  inviterColor: PieceColor;
+  status: 'pending' | 'accepted' | 'declined' | 'cancelled';
+  fromUsername: string;
+  fromAvatar: string | null;
+  fromCountry: string;
+  fromCountryCode: string;
+  toUsername: string;
+  toAvatar: string | null;
+  toCountry: string;
+  toCountryCode: string;
+  createdAt: string;
+}
+
+interface InvitesResponse {
+  incoming: GameInvite[];
+  outgoing: GameInvite[];
+}
+
+interface ActiveMatch {
+  id: string;
+  boardSize: BoardSize;
+  boardTheme: BoardTheme;
+  myColor: PieceColor;
+  opponentId: string;
+  opponentUsername: string;
+  opponentAvatar: string | null;
+  opponentCountry: string;
+  opponentCountryCode: string;
+}
 
 const Dashboard: React.FC = () => {
   const { user, logout } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [playerSearch, setPlayerSearch] = useState('');
@@ -41,14 +71,105 @@ const Dashboard: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<PieceColor>('white');
   const [selectedTheme, setSelectedTheme] = useState<BoardTheme>('classic');
   const [selectedSize, setSelectedSize] = useState<BoardSize>(12);
+  const [players, setPlayers] = useState<User[]>([]);
+  const [selectedOpponent, setSelectedOpponent] = useState<User | null>(null);
+  const [incomingInvites, setIncomingInvites] = useState<GameInvite[]>([]);
+  const [outgoingInvites, setOutgoingInvites] = useState<GameInvite[]>([]);
+  const [activeMatches, setActiveMatches] = useState<ActiveMatch[]>([]);
+  const seenIncomingInviteIds = useRef<Set<string>>(new Set());
+  const handledAcceptedOutgoing = useRef<Set<string>>(new Set());
+
+  const fetchPlayers = useCallback(async (): Promise<User[]> => {
+    try {
+      const data = await apiFetch<{ users: User[] }>('/users');
+      const filteredPlayers = data.users.filter(p => p.id !== user?.id);
+      setPlayers(filteredPlayers);
+      return filteredPlayers;
+    } catch {
+      // Ignore transient network errors in dashboard polling
+      return [];
+    }
+  }, [user?.id]);
+
+  const fetchInvites = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      const data = await apiFetch<InvitesResponse>('/invites');
+      const pendingIncoming = data.incoming.filter(invite => invite.status === 'pending');
+      setIncomingInvites(pendingIncoming);
+      setOutgoingInvites(data.outgoing);
+
+      const acceptedOutgoing = data.outgoing.filter(invite => invite.status === 'accepted' && invite.matchId);
+      for (const invite of acceptedOutgoing) {
+        if (!handledAcceptedOutgoing.current.has(invite.id)) {
+          handledAcceptedOutgoing.current.add(invite.id);
+          toast({
+            title: 'Invite accepted',
+            description: `${invite.toUsername} accepted your challenge. Resume it from Active Matches.`,
+            duration: 3500,
+          });
+        }
+      }
+
+      const incomingIds = new Set(pendingIncoming.map(invite => invite.id));
+      const previous = seenIncomingInviteIds.current;
+      for (const invite of pendingIncoming) {
+        if (!previous.has(invite.id)) {
+          toast({
+            title: 'New match invite',
+            description: `${invite.fromUsername} challenged you to a match.`,
+            duration: 3500,
+          });
+        }
+      }
+      seenIncomingInviteIds.current = incomingIds;
+    } catch {
+      // Ignore transient network errors in dashboard polling
+    }
+  }, [toast, user]);
+
+  const fetchActiveMatches = useCallback(async () => {
+    if (!user) return;
+
+    try {
+      const data = await apiFetch<{ matches?: ActiveMatch[]; match?: ActiveMatch | null }>('/matches/active');
+      if (Array.isArray(data.matches)) {
+        setActiveMatches(data.matches);
+      } else if (data.match) {
+        setActiveMatches([data.match]);
+      } else {
+        setActiveMatches([]);
+      }
+    } catch {
+      // Ignore transient network errors in dashboard polling
+    }
+  }, [user]);
+
+  // Fetch all users from the DB (excluding self)
+  useEffect(() => {
+    fetchPlayers();
+    fetchInvites();
+    fetchActiveMatches();
+
+    const interval = setInterval(() => {
+      fetchPlayers();
+      fetchInvites();
+      fetchActiveMatches();
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [fetchActiveMatches, fetchInvites, fetchPlayers]);
 
   if (!user) return null;
 
-  const filtered = mockPlayers.filter(p =>
+  const otherPlayers = players.filter(p => p.id !== user.id);
+
+  const filtered = otherPlayers.filter(p =>
     p.username.toLowerCase().includes(search.toLowerCase())
   );
 
-  const multiFiltered = mockPlayers.filter(p =>
+  const multiFiltered = otherPlayers.filter(p =>
     p.username.toLowerCase().includes(playerSearch.toLowerCase())
   );
 
@@ -58,7 +179,119 @@ const Dashboard: React.FC = () => {
     });
   };
 
+  const startMultiplayerGame = async () => {
+    if (!selectedOpponent) return;
+
+    try {
+      await apiFetch('/invites', {
+        method: 'POST',
+        body: JSON.stringify({
+          toUserId: selectedOpponent.id,
+          boardSize: selectedSize,
+          boardTheme: selectedTheme,
+          inviterColor: selectedColor,
+        }),
+      });
+
+      toast({
+        title: 'Invite sent',
+        description: `Waiting for ${selectedOpponent.username} to accept or decline.`,
+        duration: 3000,
+      });
+      fetchInvites();
+    } catch (err: unknown) {
+      toast({
+        title: 'Failed to send invite',
+        description: err instanceof Error ? err.message : 'Please try again.',
+        duration: 3500,
+      });
+    }
+  };
+
+  const acceptInvite = useCallback(async (invite: GameInvite) => {
+    try {
+      const response = await apiFetch<{ invite: GameInvite }>(`/invites/${invite.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'accepted' }),
+      });
+      const acceptedInvite = response.invite;
+
+      let opponentFromList = players.find(p => p.id === invite.fromUserId) ?? null;
+      if (!opponentFromList) {
+        toast({
+          title: 'Player list is outdated',
+          description: 'Refreshing players before opening the game.',
+          duration: 2500,
+        });
+        const refreshedPlayers = await fetchPlayers();
+        opponentFromList = refreshedPlayers.find(p => p.id === invite.fromUserId) ?? null;
+      }
+
+      if (!opponentFromList) {
+        toast({
+          title: 'Could not start match',
+          description: 'Opponent data is unavailable. Try again in a moment.',
+          duration: 3500,
+        });
+        fetchInvites();
+        return;
+      }
+
+      navigate('/game', {
+        state: {
+          gameType: 'multiplayer',
+          playerColor: invite.inviterColor === 'white' ? 'black' : 'white',
+          boardTheme: invite.boardTheme,
+          boardSize: invite.boardSize,
+          matchId: acceptedInvite.matchId,
+          opponent: opponentFromList,
+        },
+      });
+    } catch (err: unknown) {
+      toast({
+        title: 'Failed to accept invite',
+        description: err instanceof Error ? err.message : 'Please try again.',
+        duration: 3500,
+      });
+    }
+  }, [fetchInvites, fetchPlayers, navigate, players, toast]);
+
+  const declineInvite = useCallback(async (invite: GameInvite) => {
+    try {
+      await apiFetch(`/invites/${invite.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'declined' }),
+      });
+      toast({
+        title: 'Invite declined',
+        description: `You declined ${invite.fromUsername}'s challenge.`,
+        duration: 2500,
+      });
+      fetchInvites();
+    } catch (err: unknown) {
+      toast({
+        title: 'Failed to decline invite',
+        description: err instanceof Error ? err.message : 'Please try again.',
+        duration: 3500,
+      });
+    }
+  }, [fetchInvites, toast]);
+
   const userCountryCode = user.countryCode;
+
+  const resumeActiveMatch = useCallback((match: ActiveMatch) => {
+    const opponent = players.find(p => p.id === match.opponentId) ?? null;
+    navigate('/game', {
+      state: {
+        gameType: 'multiplayer',
+        playerColor: match.myColor,
+        boardTheme: match.boardTheme,
+        boardSize: match.boardSize,
+        matchId: match.id,
+        opponent: opponent ?? undefined,
+      },
+    });
+  }, [navigate, players]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -92,7 +325,7 @@ const Dashboard: React.FC = () => {
             <Button variant="ghost" size="icon" onClick={() => navigate('/settings')}>
               <Settings className="w-4 h-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => { logout(); navigate('/'); }}>
+            <Button variant="ghost" size="icon" onClick={() => { logout().then(() => navigate('/')); }}>
               <LogOut className="w-4 h-4" />
             </Button>
           </div>
@@ -103,6 +336,25 @@ const Dashboard: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left: Play Options */}
           <div className="lg:col-span-2 space-y-6">
+            {activeMatches.length > 0 && (
+              <div className="surface-card border border-primary/40 bg-primary/5 p-4 space-y-3">
+                <div className="text-sm font-semibold text-foreground">Active multiplayer matches</div>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {activeMatches.map(match => (
+                    <div key={match.id} className="rounded-md border border-border bg-background/80 p-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">vs {match.opponentUsername}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {match.boardSize}x{match.boardSize} · {match.boardTheme} · you play {match.myColor}
+                        </div>
+                      </div>
+                      <Button size="sm" onClick={() => resumeActiveMatch(match)}>Resume</Button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Stats */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
@@ -372,12 +624,19 @@ const Dashboard: React.FC = () => {
 
                 <div className="space-y-1 max-h-64 overflow-y-auto border border-border rounded-md p-1">
                   {multiFiltered.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">No players found</p>
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      {players.length === 0 ? 'No other registered players yet' : 'No players found'}
+                    </p>
                   ) : (
                     multiFiltered.map(player => (
                       <div
                         key={player.id}
-                        className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent transition-colors cursor-pointer group"
+                        onClick={() => setSelectedOpponent(prev => prev?.id === player.id ? null : player)}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-md transition-colors cursor-pointer border-2 ${
+                          selectedOpponent?.id === player.id
+                            ? 'border-primary bg-primary/5'
+                            : 'border-transparent hover:bg-accent'
+                        }`}
                       >
                         <div className="relative">
                           <PlayerAvatar username={player.username} src={player.avatar} size={36} />
@@ -403,21 +662,23 @@ const Dashboard: React.FC = () => {
                             {player.stats.wins}W {player.stats.losses}L · {player.stats.winRate}%
                           </div>
                         </div>
-                        {player.isOnline && (
-                          <Button size="sm" variant="default" className="text-xs h-7 px-3">
-                            Challenge
-                          </Button>
+                        {selectedOpponent?.id === player.id && (
+                          <span className="text-xs font-medium text-primary">Selected</span>
                         )}
                       </div>
                     ))
                   )}
                 </div>
 
-                <p className="text-xs text-muted-foreground">
-                  Real-time multiplayer requires backend — coming soon!
-                </p>
                 <div className="flex gap-3">
-                  <Button variant="outline" onClick={() => setShowGameSetup(null)} className="flex-1">
+                  <Button
+                    onClick={startMultiplayerGame}
+                    className="flex-1"
+                    disabled={!selectedOpponent}
+                  >
+                    {selectedOpponent ? `Start vs ${selectedOpponent.username}` : 'Select an Opponent'}
+                  </Button>
+                  <Button variant="outline" onClick={() => { setShowGameSetup(null); setSelectedOpponent(null); }}>
                     Cancel
                   </Button>
                 </div>
@@ -427,15 +688,52 @@ const Dashboard: React.FC = () => {
 
           {/* Right: Online Players */}
           <div className="surface-card p-4 h-fit">
+            {incomingInvites.length > 0 && (
+              <div className="mb-4 border border-primary/30 bg-primary/5 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                  <Bell className="w-4 h-4 text-primary" />
+                  Match Invitations ({incomingInvites.length})
+                </div>
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {incomingInvites.map(invite => (
+                  <div key={invite.id} className="rounded-md bg-background/80 border border-border p-2.5">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate">{invite.fromUsername}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {invite.boardSize}x{invite.boardSize} · {invite.boardTheme} · you play {invite.inviterColor === 'white' ? 'black' : 'white'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" className="flex-1" onClick={() => void acceptInvite(invite)}>
+                        Join
+                      </Button>
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => void declineInvite(invite)}>
+                        Decline
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
                 <Users className="w-4 h-4 text-primary" />
                 Live Arena
               </h3>
               <span className="text-xs text-muted-foreground tabular-nums">
-                {mockPlayers.filter(p => p.isOnline).length} online
+                {filtered.filter(p => p.isOnline).length} online
               </span>
             </div>
+
+            {outgoingInvites.some(invite => invite.status === 'pending') && (
+              <div className="mb-3 text-xs text-muted-foreground bg-secondary/60 border border-border rounded-md px-3 py-2">
+                Pending invites: {outgoingInvites.filter(invite => invite.status === 'pending').length}
+              </div>
+            )}
 
             <div className="relative mb-3">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -448,41 +746,45 @@ const Dashboard: React.FC = () => {
             </div>
 
             <div className="space-y-1 max-h-96 overflow-y-auto">
-              {filtered.map(player => {
-                return (
-                  <div
-                    key={player.id}
-                    className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent transition-colors cursor-pointer group"
-                  >
-                    <div className="relative">
-                      <PlayerAvatar username={player.username} src={player.avatar} size={36} />
-                      <div
-                        className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
-                          player.isOnline ? 'bg-online pulse-online' : 'bg-offline'
-                        }`}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium text-foreground truncate">{player.username}</span>
-                        <CountryFlag code={player.countryCode} className="h-4 w-6" title={player.country} />
-                      </div>
-                      <div className="text-xs text-muted-foreground tabular-nums">
-                        {player.stats.wins}W {player.stats.losses}L · {player.stats.winRate}%
-                      </div>
-                    </div>
-                    {player.isOnline && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity text-xs"
-                      >
-                        Challenge
-                      </Button>
-                    )}
+              {filtered.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  {players.length === 0 ? 'No other players yet' : 'No results'}
+                </p>
+              ) : filtered.map(player => (
+                <div
+                  key={player.id}
+                  className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-accent transition-colors cursor-pointer group"
+                >
+                  <div className="relative">
+                    <PlayerAvatar username={player.username} src={player.avatar} size={36} />
+                    <div
+                      className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${
+                        player.isOnline ? 'bg-online pulse-online' : 'bg-offline'
+                      }`}
+                    />
                   </div>
-                );
-              })}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-sm font-medium text-foreground truncate">{player.username}</span>
+                      <CountryFlag code={player.countryCode} className="h-4 w-6" title={player.country} />
+                    </div>
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                      {player.stats.wins}W {player.stats.losses}L · {player.stats.winRate}%
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="opacity-0 group-hover:opacity-100 transition-opacity text-xs"
+                    onClick={() => {
+                      setSelectedOpponent(player);
+                      setShowGameSetup('multi');
+                    }}
+                  >
+                    Challenge
+                  </Button>
+                </div>
+              ))}
             </div>
           </div>
         </div>

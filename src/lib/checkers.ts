@@ -40,7 +40,8 @@ function getCaptureMoves(
   captured: Position[] = [],
   sequence: CaptureStep[] = [],
   origin: Position = from,
-  originalPiece: Piece = piece
+  originalPiece: Piece = piece,
+  lastDirection?: [number, number]
 ): Move[] {
   const moves: Move[] = [];
   const directions = piece.isKing
@@ -52,6 +53,10 @@ function getCaptureMoves(
   if (piece.isKing) {
     // Kings can fly — scan diagonals for captures
     for (const [dr, dc] of directions) {
+      if (lastDirection && dr === -lastDirection[0] && dc === -lastDirection[1]) {
+        continue;
+      }
+
       let r = from.row + dr;
       let c = from.col + dc;
       while (isValidPos(r, c, size) && !board[r][c]) {
@@ -77,7 +82,7 @@ function getCaptureMoves(
           const movedPiece = { ...piece, row: lr, col: lc };
           tempBoard[lr][lc] = movedPiece;
 
-          const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece);
+          const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece, [dr, dc]);
           if (chain.length > 0) {
             moves.push(...chain);
           } else {
@@ -111,14 +116,14 @@ function getCaptureMoves(
         const newSequence = [...sequence, { to: landPos, capture: enemyPos }];
 
         const willPromote = (piece.color === 'white' && lr === 0) || (piece.color === 'black' && lr === size - 1);
-        
+
         const tempBoard = board.map(row => [...row]);
         tempBoard[from.row][from.col] = null;
         tempBoard[enemyPos.row][enemyPos.col] = null;
         const movedPiece = { ...piece, row: lr, col: lc, isKing: piece.isKing || willPromote };
         tempBoard[lr][lc] = movedPiece;
 
-        const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece);
+        const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece, [dr, dc]);
         if (chain.length > 0) {
           moves.push(...chain);
         } else {

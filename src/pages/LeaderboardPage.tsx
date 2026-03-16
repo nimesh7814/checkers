@@ -1,11 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useAuth } from '@/contexts/AuthContext';
 import CountryFlag from '@/components/CountryFlag';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import { Button } from '@/components/ui/button';
-import { getMatchHistory } from '@/lib/matchHistory';
+import { User } from '@/types/game';
+import { apiFetch } from '@/lib/api';
 import { ArrowLeft, Crown, Medal, TrendingUp, Trophy } from 'lucide-react';
 
 interface LeaderboardEntry {
@@ -18,45 +19,35 @@ interface LeaderboardEntry {
   losses: number;
   draws: number;
   winRate: number;
-  totalCaptures: number;
 }
 
 const LeaderboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
-  const leaderboard = useMemo(() => {
-    const stored = localStorage.getItem('checkers_users');
-    const allUsers: any[] = stored ? JSON.parse(stored) : [];
-
-    const entries: LeaderboardEntry[] = allUsers.map(u => {
-      const matches = getMatchHistory(u.id);
-      const wins = matches.filter(m => m.result === 'win').length;
-      const losses = matches.filter(m => m.result === 'loss').length;
-      const draws = matches.filter(m => m.result === 'draw').length;
-      const gamesPlayed = matches.length;
-      const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
-      const totalCaptures = matches.reduce((s, m) => s + m.capturedByPlayer, 0);
-
-      return {
-        id: u.id,
-        username: u.username,
-        avatar: u.avatar,
-        countryCode: u.countryCode,
-        gamesPlayed: Math.max(gamesPlayed, u.stats?.gamesPlayed || 0),
-        wins: Math.max(wins, u.stats?.wins || 0),
-        losses: Math.max(losses, u.stats?.losses || 0),
-        draws: Math.max(draws, u.stats?.draws || 0),
-        winRate,
-        totalCaptures,
-      };
-    });
-
-    // Sort by win rate desc, then by games played desc
-    return entries.sort((a, b) => {
-      if (b.winRate !== a.winRate) return b.winRate - a.winRate;
-      return b.gamesPlayed - a.gamesPlayed;
-    });
+  useEffect(() => {
+    apiFetch<{ users: User[] }>('/users')
+      .then(data => {
+        const entries: LeaderboardEntry[] = data.users.map(u => ({
+          id: u.id,
+          username: u.username,
+          avatar: u.avatar,
+          countryCode: u.countryCode,
+          gamesPlayed: u.stats.gamesPlayed,
+          wins: u.stats.wins,
+          losses: u.stats.losses,
+          draws: u.stats.draws,
+          winRate: u.stats.winRate,
+        }));
+        // Sort by win rate desc, then games played desc
+        entries.sort((a, b) => {
+          if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+          return b.gamesPlayed - a.gamesPlayed;
+        });
+        setLeaderboard(entries);
+      })
+      .catch(() => {});
   }, []);
 
   const getRankStyle = (rank: number) => {

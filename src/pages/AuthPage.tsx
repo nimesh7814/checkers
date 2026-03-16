@@ -63,6 +63,9 @@ const AuthPage: React.FC = () => {
   const { login, register } = useAuth();
   const navigate = useNavigate();
 
+  // Shared loading state
+  const [submitting, setSubmitting] = useState(false);
+
   // Login state
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -97,17 +100,20 @@ const AuthPage: React.FC = () => {
     c.name.toLowerCase().includes(countrySearch.toLowerCase())
   );
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
     if (!loginUser || !loginPass) {
       setLoginError('All fields are required');
       return;
     }
-    if (login(loginUser, loginPass)) {
+    setSubmitting(true);
+    const result = await login(loginUser, loginPass);
+    setSubmitting(false);
+    if (result.success) {
       navigate('/dashboard');
     } else {
-      setLoginError('Invalid username or password');
+      setLoginError(result.error ?? 'Invalid username or password');
     }
   };
 
@@ -128,13 +134,21 @@ const AuthPage: React.FC = () => {
     return Object.keys(errors).length === 0;
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateRegister()) return;
-    if (register(regData)) {
+    setSubmitting(true);
+    const result = await register(regData);
+    setSubmitting(false);
+    if (result.success) {
       navigate('/dashboard');
     } else {
-      setRegErrors({ username: 'Username already taken' });
+      const msg = result.error ?? 'Registration failed';
+      if (msg.toLowerCase().includes('username') || msg.toLowerCase().includes('email')) {
+        setRegErrors({ username: msg });
+      } else {
+        setRegErrors({ username: msg });
+      }
     }
   };
 
@@ -218,7 +232,9 @@ const AuthPage: React.FC = () => {
                   </div>
                 </div>
                 {loginError && <p className="text-sm text-destructive">{loginError}</p>}
-                <Button type="submit" className="w-full">Sign In</Button>
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? 'Signing in…' : 'Sign In'}
+                </Button>
               </motion.form>
             ) : (
               <motion.form
@@ -371,7 +387,9 @@ const AuthPage: React.FC = () => {
                   {regErrors.country && <p className="text-xs text-destructive mt-1">{regErrors.country}</p>}
                 </div>
 
-                <Button type="submit" className="w-full">Create Account</Button>
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? 'Creating account…' : 'Create Account'}
+                </Button>
               </motion.form>
             )}
           </AnimatePresence>
