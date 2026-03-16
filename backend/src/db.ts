@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
@@ -10,6 +11,50 @@ export const pool = new Pool({
   user: process.env.DB_USER || 'checkers',
   password: process.env.DB_PASSWORD || 'checkers_password',
 });
+
+async function seedDemoUsers(): Promise<void> {
+  const candidates = [
+    {
+      username: process.env.DEMO_USER_1_USERNAME,
+      password: process.env.DEMO_USER_1_PASSWORD,
+      firstName: 'Demo',
+      lastName: 'One',
+    },
+    {
+      username: process.env.DEMO_USER_2_USERNAME,
+      password: process.env.DEMO_USER_2_PASSWORD,
+      firstName: 'Demo',
+      lastName: 'Two',
+    },
+  ].filter(
+    user =>
+      typeof user.username === 'string' &&
+      user.username.trim().length > 0 &&
+      typeof user.password === 'string' &&
+      user.password.trim().length > 0,
+  ) as Array<{ username: string; password: string; firstName: string; lastName: string }>;
+
+  for (const user of candidates) {
+    const username = user.username.trim();
+    const email = `${username.toLowerCase()}@demo.local`;
+    const passwordHash = await bcrypt.hash(user.password, 12);
+
+    await pool.query(
+      `INSERT INTO users
+         (username, email, password_hash, first_name, last_name, country, country_code, is_online)
+       VALUES
+         ($1, $2, $3, $4, $5, $6, $7, false)
+       ON CONFLICT (username) DO UPDATE
+       SET email = EXCLUDED.email,
+           password_hash = EXCLUDED.password_hash,
+           first_name = EXCLUDED.first_name,
+           last_name = EXCLUDED.last_name,
+           country = EXCLUDED.country,
+           country_code = EXCLUDED.country_code`,
+      [username, email, passwordHash, user.firstName, user.lastName, 'Unknown', 'UN'],
+    );
+  }
+}
 
 export async function initDb(): Promise<void> {
   await pool.query(`
@@ -107,4 +152,6 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_game_matches_active_by_black
       ON game_matches(black_user_id, status, created_at DESC);
   `);
+
+  await seedDemoUsers();
 }

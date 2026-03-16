@@ -1,73 +1,165 @@
-# Welcome to your Lovable project
+# Checkers Arena
 
-## Project info
+Multiplayer and AI checkers game with React frontend, Node/Express backend, PostgreSQL, Docker support, invitations, resumable matches, and realtime sync.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Features
 
-## How can I edit this code?
+- Multiplayer invites with accept and decline flow
+- Realtime match synchronization between players
+- Resume active matches from dashboard
+- Disconnect grace period with timeout win handling
+- AI mode with difficulty levels
+- 8x8 and 12x12 board support
+- Multiple board themes
+- Profile, leaderboard, match history, and achievements pages
+- JWT authentication and persistent user data in PostgreSQL
 
-There are several ways of editing your application.
+## Tech Stack
 
-**Use Lovable**
+- Frontend: React, TypeScript, Vite, Tailwind, shadcn/ui
+- Backend: Node.js, Express, TypeScript, PostgreSQL
+- Realtime: Socket.IO
+- Infra: Docker Compose, Nginx
+- Tests: Vitest
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+## Quick Start (Docker)
 
-Changes made via Lovable will be committed automatically to this repo.
+### 1. Prepare environment
 
-**Use your preferred IDE**
+Copy [.env.example](.env.example) to `.env`:
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+```bash
+cp .env.example .env
+```
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+On Windows PowerShell:
 
-Follow these steps:
+```powershell
+Copy-Item .env.example .env
+```
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### 2. Build and run
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+```bash
+docker compose up -d --build
+```
 
-# Step 3: Install the necessary dependencies.
-npm i
+Docker Compose automatically reads variables from `.env` in the project root.
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+### 3. Open app
+
+- Frontend: http://localhost:8036
+- Backend health: http://localhost:8036/api/health
+
+## Local Development (without Docker)
+
+### Requirements
+
+- Node.js 20+
+- npm
+- PostgreSQL 16+
+
+### 1. Frontend setup
+
+From repository root:
+
+```bash
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+### 2. Backend setup
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+In a second terminal:
 
-**Use GitHub Codespaces**
+```bash
+cd backend
+npm install
+npm run dev
+```
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+### 3. Environment variables
 
-## What technologies are used for this project?
+Use values from [.env.example](.env.example) for both root and backend runtime as needed.
 
-This project is built with:
+## Environment Parameters
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+These variables are consumed by [docker-compose.yml](docker-compose.yml):
 
-## How can I deploy this project?
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `POSTGRES_DB` | `db` | PostgreSQL database name |
+| `POSTGRES_USER` | `db` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | `db` | PostgreSQL password |
+| `DB_HOST` | `backend` | Database host for backend |
+| `DB_PORT` | `backend` | Database port |
+| `DB_NAME` | `backend` | Database name for backend connection |
+| `DB_USER` | `backend` | Database username for backend connection |
+| `DB_PASSWORD` | `backend` | Database password for backend connection |
+| `JWT_SECRET` | `backend` | JWT signing secret |
+| `PORT` | `backend` | Backend listen port inside container |
+| `CORS_ORIGIN` | `backend` | Allowed frontend origin(s) |
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+Notes:
 
-## Can I connect a custom domain to my Lovable project?
+- If your `JWT_SECRET` contains a dollar sign, escape it in `.env` as `$$` so Docker Compose keeps it literal.
+- `VITE_API_URL` is included for frontend configuration and defaults to `/api` in Docker builds.
+- Do not commit your real `.env` to git. Keep real credentials only in local `.env` and/or secret manager.
 
-Yes, you can!
+## Demo Accounts
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+If these values are set in `.env`, the backend auto-creates (or updates) demo users on startup:
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- Username: `player_one` / Password: `PlayerOne123!`
+- Username: `player_two` / Password: `PlayerTwo123!`
+
+To apply changes, restart backend services:
+
+```bash
+docker compose up -d --build
+```
+
+You can then test invite, realtime sync, resume, and timeout flow quickly across two browser sessions.
+
+## Testing
+
+Run all frontend tests:
+
+```bash
+npm test
+```
+
+Run checkers rules tests only:
+
+```bash
+npm test -- --run src/test/checkers.test.ts
+```
+
+Build backend TypeScript:
+
+```bash
+cd backend
+npm run build
+```
+
+## Project Structure
+
+- [src](src): Frontend application
+- [backend/src](backend/src): Backend API and database logic
+- [docker-compose.yml](docker-compose.yml): Full stack orchestration
+- [nginx.conf](nginx.conf): Frontend and API/websocket proxy
+
+## Troubleshooting
+
+- If backend cannot connect to PostgreSQL, reset local Docker volumes:
+
+```bash
+docker compose down -v
+docker compose up -d --build
+```
+
+- If multiplayer state looks stale, hard refresh both browser tabs to ensure latest client bundle is loaded.
+
+## License
+
+See [LICENSE](LICENSE).
