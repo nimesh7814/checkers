@@ -1,5 +1,5 @@
-import express from 'express';
-import cors from 'cors';
+import express, { type Request } from 'express';
+import cors, { type CorsOptionsDelegate } from 'cors';
 import dotenv from 'dotenv';
 import http from 'http';
 import jwt from 'jsonwebtoken';
@@ -18,16 +18,110 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:8080').split(',');
+type AllowedOriginRule = {
+  any: boolean;
+  exactOrigin?: string;
+  protocol?: string;
+  hostSuffix?: string;
+};
 
-app.use(cors({
-  origin: (origin, cb) => {
-    // Allow requests with no origin (e.g. server-to-server) and listed origins
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error('Not allowed by CORS'));
-  },
-  credentials: true,
-}));
+function normalizeListValue(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
+function buildAllowedOriginRule(value: string): AllowedOriginRule | null {
+  const normalized = normalizeListValue(value);
+  if (!normalized) return null;
+  if (normalized === '*') return { any: true };
+
+  const wildcardMatch = normalized.match(/^(https?):\/\/\*\.(.+)$/i);
+  if (wildcardMatch) {
+    return {
+      any: false,
+      protocol: `${wildcardMatch[1].toLowerCase()}:`,
+      hostSuffix: `.${wildcardMatch[2].toLowerCase()}`,
+    };
+  }
+
+  const hostnameWildcard = normalized.match(/^\*\.(.+)$/i);
+  if (hostnameWildcard) {
+    return {
+      any: false,
+      hostSuffix: `.${hostnameWildcard[1].toLowerCase()}`,
+    };
+  }
+
+  try {
+    return { any: false, exactOrigin: new URL(normalized).origin.toLowerCase() };
+  } catch {
+    return { any: false, exactOrigin: normalized.toLowerCase() };
+  }
+}
+
+function extractRequestHosts(...values: Array<string | string[] | undefined>): Set<string> {
+  const hosts = new Set<string>();
+
+  for (const value of values) {
+    const parts = Array.isArray(value) ? value : [value];
+    for (const part of parts) {
+      if (!part) continue;
+      for (const host of part.split(',')) {
+        const normalized = host.trim().toLowerCase();
+        if (normalized) hosts.add(normalized);
+      }
+    }
+  }
+
+  return hosts;
+}
+
+const allowedOriginRules = (process.env.CORS_ORIGIN || 'http://localhost:8036')
+  .split(',')
+  .map(buildAllowedOriginRule)
+  .filter((rule): rule is AllowedOriginRule => rule !== null);
+
+function matchesAllowedOrigin(origin: URL): boolean {
+  const normalizedOrigin = origin.origin.toLowerCase();
+  const protocol = origin.protocol.toLowerCase();
+  const host = origin.host.toLowerCase();
+
+  return allowedOriginRules.some(rule => {
+    if (rule.any) return true;
+    if (rule.exactOrigin && rule.exactOrigin === normalizedOrigin) return true;
+    if (!rule.hostSuffix) return false;
+    if (rule.protocol && rule.protocol !== protocol) return false;
+    return host.endsWith(rule.hostSuffix);
+  });
+}
+
+function isOriginAllowed(origin: string | undefined, requestHosts?: Set<string>): boolean {
+  if (!origin) return true;
+
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  if (requestHosts?.has(parsedOrigin.host.toLowerCase())) {
+    return true;
+  }
+
+  return matchesAllowedOrigin(parsedOrigin);
+}
+
+const corsOptionsDelegate: CorsOptionsDelegate<Request> = (req, cb) => {
+  cb(null, {
+    origin: isOriginAllowed(
+      req.header('origin') ?? undefined,
+      extractRequestHosts(req.header('x-forwarded-host') ?? undefined, req.header('host') ?? undefined),
+    ),
+    credentials: true,
+  });
+};
+
+app.use(cors(corsOptionsDelegate));
 
 // 10 MB body limit to support base64 profile pictures
 app.use(express.json({ limit: '10mb' }));
@@ -45,8 +139,17 @@ initDb()
     const io = new SocketIOServer(server, {
       path: '/socket.io',
       cors: {
-        origin: allowedOrigins,
+        origin: (origin, cb) => cb(null, isOriginAllowed(origin ?? undefined)),
         credentials: true,
+      },
+      allowRequest: (req, cb) => {
+        cb(
+          null,
+          isOriginAllowed(
+            typeof req.headers.origin === 'string' ? req.headers.origin : undefined,
+            extractRequestHosts(req.headers['x-forwarded-host'], req.headers.host),
+          ),
+        );
       },
     });
 

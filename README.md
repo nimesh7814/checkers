@@ -98,12 +98,13 @@ These variables are consumed by [docker-compose.yml](docker-compose.yml):
 | `DB_PASSWORD` | `backend` | Database password for backend connection |
 | `JWT_SECRET` | `backend` | JWT signing secret |
 | `PORT` | `backend` | Backend listen port inside container |
-| `CORS_ORIGIN` | `backend` | Allowed frontend origin(s) |
+| `CORS_ORIGIN` | `backend` | Allowed frontend origin(s); comma-separated, wildcard hosts supported |
 
 Notes:
 
 - If your `JWT_SECRET` contains a dollar sign, escape it in `.env` as `$$` so Docker Compose keeps it literal.
 - `VITE_API_URL` is included for frontend configuration and defaults to `/api` in Docker builds.
+- `CORS_ORIGIN` accepts a comma-separated list such as `http://localhost:8036,https://*.trycloudflare.com` for Cloudflare Quick Tunnels, or your exact custom tunnel hostname.
 - Do not commit your real `.env` to git. Keep real credentials only in local `.env` and/or secret manager.
 
 ## Demo Accounts
