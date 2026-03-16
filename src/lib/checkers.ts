@@ -1,4 +1,4 @@
-import { Piece, Position, Move, PieceColor, AIDifficulty, BoardSize } from '@/types/game';
+import { Piece, Position, Move, PieceColor, AIDifficulty, BoardSize, CaptureStep } from '@/types/game';
 
 export function createInitialBoard(size: BoardSize = 12): (Piece | null)[][] {
   const board: (Piece | null)[][] = Array.from({ length: size }, () =>
@@ -37,7 +37,10 @@ function getCaptureMoves(
   piece: Piece,
   from: Position,
   size: number,
-  captured: Position[] = []
+  captured: Position[] = [],
+  sequence: CaptureStep[] = [],
+  origin: Position = from,
+  originalPiece: Piece = piece
 ): Move[] {
   const moves: Move[] = [];
   const directions = piece.isKing
@@ -67,17 +70,18 @@ function getCaptureMoves(
         while (isValidPos(lr, lc, size) && !board[lr][lc]) {
           const landPos = { row: lr, col: lc };
           const newCaptured = [...captured, enemyPos];
+          const newSequence = [...sequence, { to: landPos, capture: enemyPos }];
           const tempBoard = board.map(row => [...row]);
           tempBoard[from.row][from.col] = null;
           tempBoard[enemyPos.row][enemyPos.col] = null;
           const movedPiece = { ...piece, row: lr, col: lc };
           tempBoard[lr][lc] = movedPiece;
 
-          const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured);
+          const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece);
           if (chain.length > 0) {
             moves.push(...chain);
           } else {
-            moves.push({ from, to: landPos, captures: newCaptured, piece });
+            moves.push({ from: origin, to: landPos, captures: newCaptured, piece: originalPiece, sequence: newSequence });
           }
           lr += dr;
           lc += dc;
@@ -104,6 +108,7 @@ function getCaptureMoves(
         const enemyPos = { row: mr, col: mc };
         const landPos = { row: lr, col: lc };
         const newCaptured = [...captured, enemyPos];
+        const newSequence = [...sequence, { to: landPos, capture: enemyPos }];
 
         const willPromote = (piece.color === 'white' && lr === 0) || (piece.color === 'black' && lr === size - 1);
         
@@ -113,11 +118,11 @@ function getCaptureMoves(
         const movedPiece = { ...piece, row: lr, col: lc, isKing: piece.isKing || willPromote };
         tempBoard[lr][lc] = movedPiece;
 
-        const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured);
+        const chain = getCaptureMoves(tempBoard, movedPiece, landPos, size, newCaptured, newSequence, origin, originalPiece);
         if (chain.length > 0) {
           moves.push(...chain);
         } else {
-          moves.push({ from, to: landPos, captures: newCaptured, piece });
+          moves.push({ from: origin, to: landPos, captures: newCaptured, piece: originalPiece, sequence: newSequence });
         }
       }
     }
@@ -136,7 +141,7 @@ function getSimpleMoves(board: (Piece | null)[][], piece: Piece, size: number): 
       let r = from.row + dr;
       let c = from.col + dc;
       while (isValidPos(r, c, size) && !board[r][c]) {
-        moves.push({ from, to: { row: r, col: c }, captures: [], piece });
+        moves.push({ from, to: { row: r, col: c }, captures: [], piece, sequence: [] });
         r += dr;
         c += dc;
       }
@@ -147,11 +152,20 @@ function getSimpleMoves(board: (Piece | null)[][], piece: Piece, size: number): 
       const r = from.row + dr;
       const c = from.col + dc;
       if (isValidPos(r, c, size) && !board[r][c]) {
-        moves.push({ from, to: { row: r, col: c }, captures: [], piece });
+        moves.push({ from, to: { row: r, col: c }, captures: [], piece, sequence: [] });
       }
     }
   }
   return moves;
+}
+
+function filterMaxCaptures(moves: Move[]): Move[] {
+  if (moves.length === 0) {
+    return [];
+  }
+
+  const maxCaptures = Math.max(...moves.map(move => move.captures.length));
+  return moves.filter(move => move.captures.length === maxCaptures);
 }
 
 export function getAllValidMoves(board: (Piece | null)[][], color: PieceColor): Move[] {
@@ -173,8 +187,7 @@ export function getAllValidMoves(board: (Piece | null)[][], color: PieceColor): 
   }
 
   if (allCaptures.length > 0) {
-    const maxCaptures = Math.max(...allCaptures.map(m => m.captures.length));
-    return allCaptures.filter(m => m.captures.length === maxCaptures);
+    return filterMaxCaptures(allCaptures);
   }
 
   let allMoves: Move[] = [];
@@ -187,6 +200,11 @@ export function getAllValidMoves(board: (Piece | null)[][], color: PieceColor): 
 export function getMovesForPiece(board: (Piece | null)[][], piece: Piece): Move[] {
   const allMoves = getAllValidMoves(board, piece.color);
   return allMoves.filter(m => m.from.row === piece.row && m.from.col === piece.col);
+}
+
+export function getCaptureMovesForPiece(board: (Piece | null)[][], piece: Piece): Move[] {
+  const captures = getCaptureMoves(board, piece, { row: piece.row, col: piece.col }, board.length);
+  return filterMaxCaptures(captures);
 }
 
 export function executeMove(board: (Piece | null)[][], move: Move): (Piece | null)[][] {
@@ -234,10 +252,13 @@ export function moveToNotation(move: Move, size: number = 12): string {
   return `${from}${sep}${to}`;
 }
 
-// AI logic
-export function getAIMove(board: (Piece | null)[][], color: PieceColor, difficulty: AIDifficulty): Move | null {
+export function getAIMoveFromMoves(
+  board: (Piece | null)[][],
+  color: PieceColor,
+  difficulty: AIDifficulty,
+  moves: Move[]
+): Move | null {
   const size = board.length;
-  const moves = getAllValidMoves(board, color);
   if (moves.length === 0) return null;
 
   const center = (size - 1) / 2;
@@ -285,4 +306,9 @@ export function getAIMove(board: (Piece | null)[][], color: PieceColor, difficul
       return bestMove;
     }
   }
+}
+
+// AI logic
+export function getAIMove(board: (Piece | null)[][], color: PieceColor, difficulty: AIDifficulty): Move | null {
+  return getAIMoveFromMoves(board, color, difficulty, getAllValidMoves(board, color));
 }

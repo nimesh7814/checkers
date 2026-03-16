@@ -237,8 +237,9 @@ const AuthPage: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <Label className="text-foreground">First Name</Label>
+                    <Label htmlFor="register-first-name" className="text-foreground">First Name</Label>
                     <Input
+                      id="register-first-name"
                       value={regData.firstName}
                       onChange={e => setRegData(d => ({ ...d, firstName: e.target.value }))}
                       className="mt-1 bg-secondary border-border text-foreground"
@@ -246,8 +247,9 @@ const AuthPage: React.FC = () => {
                     {regErrors.firstName && <p className="text-xs text-destructive mt-1">{regErrors.firstName}</p>}
                   </div>
                   <div>
-                    <Label className="text-foreground">Last Name</Label>
+                    <Label htmlFor="register-last-name" className="text-foreground">Last Name</Label>
                     <Input
+                      id="register-last-name"
                       value={regData.lastName}
                       onChange={e => setRegData(d => ({ ...d, lastName: e.target.value }))}
                       className="mt-1 bg-secondary border-border text-foreground"
@@ -257,8 +259,9 @@ const AuthPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Label className="text-foreground">Email Address</Label>
+                  <Label htmlFor="register-email" className="text-foreground">Email Address</Label>
                   <Input
+                    id="register-email"
                     type="email"
                     value={regData.email}
                     onChange={e => setRegData(d => ({ ...d, email: e.target.value }))}
@@ -269,8 +272,9 @@ const AuthPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Label className="text-foreground">Username</Label>
+                  <Label htmlFor="register-username" className="text-foreground">Username</Label>
                   <Input
+                    id="register-username"
                     value={regData.username}
                     onChange={e => setRegData(d => ({ ...d, username: e.target.value }))}
                     className="mt-1 bg-secondary border-border text-foreground"
@@ -279,9 +283,10 @@ const AuthPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Label className="text-foreground">Password</Label>
+                  <Label htmlFor="register-password" className="text-foreground">Password</Label>
                   <div className="relative mt-1">
                     <Input
+                      id="register-password"
                       type={showRegPass ? 'text' : 'password'}
                       value={regData.password}
                       onChange={e => setRegData(d => ({ ...d, password: e.target.value }))}
@@ -299,8 +304,9 @@ const AuthPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Label className="text-foreground">Confirm Password</Label>
+                  <Label htmlFor="register-confirm-password" className="text-foreground">Confirm Password</Label>
                   <Input
+                    id="register-confirm-password"
                     type="password"
                     value={regConfirmPass}
                     onChange={e => setRegConfirmPass(e.target.value)}
@@ -310,8 +316,9 @@ const AuthPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <Label className="text-foreground">Birthday</Label>
+                  <Label htmlFor="register-birthday" className="text-foreground">Birthday</Label>
                   <Input
+                    id="register-birthday"
                     type="date"
                     value={regData.birthday}
                     onChange={e => setRegData(d => ({ ...d, birthday: e.target.value }))}

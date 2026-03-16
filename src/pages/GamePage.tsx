@@ -6,8 +6,8 @@ import CheckerBoard from '@/components/CheckerBoard';
 import PlayerAvatar from '@/components/PlayerAvatar';
 import { Button } from '@/components/ui/button';
 import {
-  createInitialBoard, getAllValidMoves, getMovesForPiece,
-  executeMove, checkGameOver, moveToNotation, getAIMove,
+  createInitialBoard, getAllValidMoves, getMovesForPiece, getCaptureMovesForPiece,
+  executeMove, checkGameOver, moveToNotation, getAIMove, getAIMoveFromMoves,
 } from '@/lib/checkers';
 import { saveMatch } from '@/lib/matchHistory';
 import { Piece, Position, Move, PieceColor, BoardTheme, BoardSize, AIDifficulty, MoveRecord, MatchRecord } from '@/types/game';
@@ -46,6 +46,7 @@ const GamePage: React.FC = () => {
   const [gameOver, setGameOver] = useState(false);
   const [winner, setWinner] = useState<PieceColor | 'draw' | null>(null);
   const [timer, setTimer] = useState({ white: 600, black: 600 });
+  const [forcedContinuationPiece, setForcedContinuationPiece] = useState<Position | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [matchSaved, setMatchSaved] = useState(false);
   const gameStartTime = useRef(Date.now());
@@ -76,19 +77,6 @@ const GamePage: React.FC = () => {
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [currentTurn, gameOver]);
-
-  // AI move
-  useEffect(() => {
-    if (gameType === 'ai' && currentTurn === aiColor && !gameOver) {
-      const timeout = setTimeout(() => {
-        const move = getAIMove(board, aiColor, aiDifficulty);
-        if (move) {
-          applyMove(move);
-        }
-      }, 500 + Math.random() * 500);
-      return () => clearTimeout(timeout);
-    }
   }, [currentTurn, gameOver]);
 
   // Save match when game ends
@@ -144,7 +132,21 @@ const GamePage: React.FC = () => {
       playMoveSound();
     }
 
-    setMoveHistory(prev => [...prev, moveToNotation(move)]);
+    setMoveHistory(prev => [...prev, moveToNotation(move, boardSize)]);
+
+    if (move.captures.length > 0 && landedPiece) {
+      const followUpMoves = getCaptureMovesForPiece(newBoard, landedPiece);
+
+      if (followUpMoves.length > 0) {
+        const nextPosition = { row: landedPiece.row, col: landedPiece.col };
+        setForcedContinuationPiece(nextPosition);
+        setSelectedPiece(nextPosition);
+        setValidMoves(followUpMoves);
+        return;
+      }
+    }
+
+    setForcedContinuationPiece(null);
     setSelectedPiece(null);
     setValidMoves([]);
 
@@ -159,13 +161,48 @@ const GamePage: React.FC = () => {
     } else {
       setCurrentTurn(nextTurn);
     }
-  }, [board, currentTurn, playerColor]);
+  }, [board, boardSize, currentTurn, playerColor]);
 
   const allCurrentTurnMoves = useMemo((): Move[] => {
     if (gameOver) return [];
-    if (gameType === 'ai' && currentTurn === aiColor) return [];
+    if (forcedContinuationPiece) {
+      const continuedPiece = board[forcedContinuationPiece.row]?.[forcedContinuationPiece.col];
+      if (!continuedPiece || continuedPiece.color !== currentTurn) {
+        return [];
+      }
+
+      return getCaptureMovesForPiece(board, continuedPiece);
+    }
     return getAllValidMoves(board, currentTurn);
-  }, [board, currentTurn, gameOver, gameType, aiColor]);
+  }, [board, currentTurn, forcedContinuationPiece, gameOver]);
+
+  // AI move
+  useEffect(() => {
+    if (gameType === 'ai' && currentTurn === aiColor && !gameOver) {
+      const timeout = setTimeout(() => {
+        const move = forcedContinuationPiece
+          ? getAIMoveFromMoves(board, aiColor, aiDifficulty, allCurrentTurnMoves)
+          : getAIMove(board, aiColor, aiDifficulty);
+
+        if (move) {
+          const firstStep = move.sequence?.[0];
+          if (firstStep && move.captures.length > 0) {
+            applyMove({
+              from: move.from,
+              to: firstStep.to,
+              captures: [firstStep.capture],
+              piece: move.piece,
+              sequence: [firstStep],
+            });
+            return;
+          }
+
+          applyMove(move);
+        }
+      }, 500 + Math.random() * 500);
+      return () => clearTimeout(timeout);
+    }
+  }, [aiColor, aiDifficulty, allCurrentTurnMoves, applyMove, board, currentTurn, forcedContinuationPiece, gameOver, gameType]);
 
   // Compute which pieces can move (for visual hints)
   const movablePieces = useMemo((): Position[] => {
@@ -201,6 +238,29 @@ const GamePage: React.FC = () => {
   // Green target dots: show all valid moves for the selected piece
   const boardHintMoves = useMemo(() => {
     if (!selectedPiece) return [];
+
+    if (validMoves.some(move => move.captures.length > 0)) {
+      const firstStepTargets = new Map<string, Move>();
+
+      for (const move of validMoves) {
+        const firstStep = move.sequence?.[0];
+        if (!firstStep) continue;
+
+        const key = `${firstStep.to.row},${firstStep.to.col}`;
+        if (!firstStepTargets.has(key)) {
+          firstStepTargets.set(key, {
+            from: move.from,
+            to: firstStep.to,
+            captures: [firstStep.capture],
+            piece: move.piece,
+            sequence: [firstStep],
+          });
+        }
+      }
+
+      return Array.from(firstStepTargets.values());
+    }
+
     return validMoves;
   }, [selectedPiece, validMoves]);
 
@@ -252,7 +312,29 @@ const GamePage: React.FC = () => {
     const piece = board[row][col];
 
     if (selectedPiece) {
-      const move = validMoves.find(m => m.to.row === row && m.to.col === col);
+      const hasCaptureSequence = validMoves.some(move => move.captures.length > 0);
+      const move = hasCaptureSequence
+        ? (() => {
+            const candidate = validMoves.find(candidateMove => {
+              const firstStep = candidateMove.sequence?.[0];
+              return firstStep?.to.row === row && firstStep.to.col === col;
+            });
+
+            const firstStep = candidate?.sequence?.[0];
+            if (!candidate || !firstStep) {
+              return undefined;
+            }
+
+            return {
+              from: candidate.from,
+              to: firstStep.to,
+              captures: [firstStep.capture],
+              piece: candidate.piece,
+              sequence: [firstStep],
+            } satisfies Move;
+          })()
+        : validMoves.find(m => m.to.row === row && m.to.col === col);
+
       if (move) {
         applyMove(move);
         return;
@@ -308,6 +390,7 @@ const GamePage: React.FC = () => {
     setCurrentTurn('white');
     setSelectedPiece(null);
     setValidMoves([]);
+    setForcedContinuationPiece(null);
     setMoveHistory([]);
     setCapturedWhite(0);
     setCapturedBlack(0);

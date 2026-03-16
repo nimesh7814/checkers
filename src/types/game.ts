@@ -46,11 +46,17 @@ export interface Position {
   col: number;
 }
 
+export interface CaptureStep {
+  to: Position;
+  capture: Position;
+}
+
 export interface Move {
   from: Position;
   to: Position;
   captures: Position[];
   piece: Piece;
+  sequence?: CaptureStep[];
 }
 
 export interface GameState {

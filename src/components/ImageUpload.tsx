@@ -108,6 +108,7 @@ const ImageUpload: React.FC<ImageUploadProps> = ({ value, onChange, username = '
         </div>
         {value && (
           <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); onChange(null); }}
             className="absolute -top-1 -right-1 w-6 h-6 rounded-full bg-destructive flex items-center justify-center"
           >
@@ -142,8 +143,8 @@ const ImageUpload: React.FC<ImageUploadProps> = ({ value, onChange, username = '
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowCrop(false)}>Cancel</Button>
-            <Button onClick={handleSave}>Save</Button>
+            <Button type="button" variant="outline" onClick={() => setShowCrop(false)}>Cancel</Button>
+            <Button type="button" onClick={handleSave}>Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
