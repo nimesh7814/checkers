@@ -21,6 +21,12 @@ app.use('/socket.io', createProxyMiddleware({
   xfwd: true,
 }));
 
+// Some proxies/challenge pages request /favicon.ico directly and can show stale branding.
+app.get('/favicon.ico', (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.redirect(302, '/checkers-icon.svg');
+});
+
 app.use(express.static(distPath));
 
 app.use((_req, res) => {
