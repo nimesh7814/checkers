@@ -8,6 +8,7 @@ Multiplayer and AI checkers game with React frontend, Node/Express backend, Post
 - Realtime match synchronization between players
 - Resume active matches from dashboard
 - Disconnect grace period with timeout win handling
+- Registration blocks duplicate usernames and email addresses, with live availability hints
 - AI mode with difficulty levels
 - 8x8 and 12x12 board support
 - Multiple board themes
@@ -37,6 +38,25 @@ On Windows PowerShell:
 ```powershell
 Copy-Item .env.example .env
 ```
+
+If you expose `http://localhost:8036` through Cloudflare Tunnel or another reverse proxy, add the public HTTPS hostname to `CORS_ORIGIN` in `.env`.
+
+Examples:
+
+```env
+CORS_ORIGIN=http://localhost:8036,https://ck.akalanka.me
+```
+
+```env
+CORS_ORIGIN=http://localhost:8036,https://*.trycloudflare.com
+```
+
+Rules:
+
+- Keep `http://localhost:8036` if you still want local access.
+- Add every public hostname that serves the frontend.
+- Use comma-separated values with no spaces.
+- Rebuild or restart the backend after editing `.env`.
 
 ### 2. Build and run
 
@@ -104,8 +124,17 @@ Notes:
 
 - If your `JWT_SECRET` contains a dollar sign, escape it in `.env` as `$$` so Docker Compose keeps it literal.
 - `VITE_API_URL` is included for frontend configuration and defaults to `/api` in Docker builds.
-- `CORS_ORIGIN` accepts a comma-separated list such as `http://localhost:8036,https://*.trycloudflare.com` for Cloudflare Quick Tunnels, or your exact custom tunnel hostname.
+- `CORS_ORIGIN` accepts exact origins and wildcard hosts such as `http://localhost:8036,https://*.trycloudflare.com`.
+- For a custom tunnel domain, add the exact public hostname, for example `https://ck.akalanka.me`.
 - Do not commit your real `.env` to git. Keep real credentials only in local `.env` and/or secret manager.
+
+## Registration Rules
+
+- Username must be at least 4 characters long.
+- Username may contain only letters, numbers, and underscores.
+- Username and email address must both be unique.
+- The registration form checks username and email availability live before account creation.
+- The backend still enforces uniqueness during registration, so duplicate accounts are rejected even if two requests race.
 
 ## Demo Accounts
 

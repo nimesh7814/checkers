@@ -26,6 +26,7 @@ const boardThemeImages: Record<BoardTheme, string> = {
 interface GameInvite {
   id: string;
   matchId: string | null;
+  roomName: string | null;
   fromUserId: string;
   toUserId: string;
   boardSize: BoardSize;
@@ -50,6 +51,7 @@ interface InvitesResponse {
 
 interface ActiveMatch {
   id: string;
+  roomName: string | null;
   boardSize: BoardSize;
   boardTheme: BoardTheme;
   myColor: PieceColor;
@@ -71,6 +73,7 @@ const Dashboard: React.FC = () => {
   const [selectedColor, setSelectedColor] = useState<PieceColor>('white');
   const [selectedTheme, setSelectedTheme] = useState<BoardTheme>('classic');
   const [selectedSize, setSelectedSize] = useState<BoardSize>(12);
+  const [roomName, setRoomName] = useState('');
   const [players, setPlayers] = useState<User[]>([]);
   const [selectedOpponent, setSelectedOpponent] = useState<User | null>(null);
   const [incomingInvites, setIncomingInvites] = useState<GameInvite[]>([]);
@@ -183,10 +186,12 @@ const Dashboard: React.FC = () => {
     if (!selectedOpponent) return;
 
     try {
+      const trimmedRoomName = roomName.trim();
       await apiFetch('/invites', {
         method: 'POST',
         body: JSON.stringify({
           toUserId: selectedOpponent.id,
+          ...(trimmedRoomName ? { roomName: trimmedRoomName } : {}),
           boardSize: selectedSize,
           boardTheme: selectedTheme,
           inviterColor: selectedColor,
@@ -297,37 +302,39 @@ const Dashboard: React.FC = () => {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border bg-card">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
               <Crown className="w-5 h-5 text-primary-foreground" />
             </div>
             <span className="font-bold text-foreground tracking-tight">Checkers Arena</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto min-w-0">
             <div className="flex items-center gap-2">
               <PlayerAvatar username={user.username} src={user.avatar} size={32} />
-              <span className="text-sm font-medium text-foreground hidden sm:inline">{user.username}</span>
+              <span className="text-sm font-medium text-foreground max-w-28 truncate hidden sm:inline">{user.username}</span>
               <CountryFlag code={userCountryCode} className="h-4 w-6" title={user.country} />
             </div>
-            <Button variant="ghost" size="icon" onClick={() => navigate('/profile')}>
-              <UserCircle className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => navigate('/leaderboard')}>
-              <Trophy className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => navigate('/achievements')}>
-              <Award className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => navigate('/history')}>
-              <History className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => navigate('/settings')}>
-              <Settings className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => { logout().then(() => navigate('/')); }}>
-              <LogOut className="w-4 h-4" />
-            </Button>
+            <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/profile')}>
+                <UserCircle className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/leaderboard')}>
+                <Trophy className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/achievements')}>
+                <Award className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/history')}>
+                <History className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/settings')}>
+                <Settings className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="shrink-0" onClick={() => { logout().then(() => navigate('/')); }}>
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -341,14 +348,14 @@ const Dashboard: React.FC = () => {
                 <div className="text-sm font-semibold text-foreground">Active multiplayer matches</div>
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                   {activeMatches.map(match => (
-                    <div key={match.id} className="rounded-md border border-border bg-background/80 p-3 flex items-center justify-between gap-3">
+                    <div key={match.id} className="rounded-md border border-border bg-background/80 p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground truncate">vs {match.opponentUsername}</div>
+                        <div className="text-sm font-medium text-foreground truncate">{match.roomName ?? 'Arena Room'} · vs {match.opponentUsername}</div>
                         <div className="text-xs text-muted-foreground">
                           {match.boardSize}x{match.boardSize} · {match.boardTheme} · you play {match.myColor}
                         </div>
                       </div>
-                      <Button size="sm" onClick={() => resumeActiveMatch(match)}>Resume</Button>
+                      <Button size="sm" className="w-full sm:w-auto" onClick={() => resumeActiveMatch(match)}>Resume</Button>
                     </div>
                   ))}
                 </div>
@@ -510,7 +517,7 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Button onClick={startAIGame} className="flex-1">
                     Start Game
                   </Button>
@@ -622,6 +629,20 @@ const Dashboard: React.FC = () => {
                   </div>
                 </div>
 
+                <div>
+                  <label className="text-sm text-muted-foreground mb-2 block">Room Name (optional)</label>
+                  <Input
+                    placeholder="Example: Evening Falcon Arena"
+                    value={roomName}
+                    onChange={e => setRoomName(e.target.value)}
+                    className="bg-secondary border-border text-foreground"
+                    maxLength={80}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Leave blank to auto-generate a unique animal room name.
+                  </p>
+                </div>
+
                 <div className="space-y-1 max-h-64 overflow-y-auto border border-border rounded-md p-1">
                   {multiFiltered.length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-4">
@@ -670,15 +691,15 @@ const Dashboard: React.FC = () => {
                   )}
                 </div>
 
-                <div className="flex gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Button
                     onClick={startMultiplayerGame}
                     className="flex-1"
                     disabled={!selectedOpponent}
                   >
-                    {selectedOpponent ? `Start vs ${selectedOpponent.username}` : 'Select an Opponent'}
+                    {selectedOpponent ? `Create Room vs ${selectedOpponent.username}` : 'Select an Opponent'}
                   </Button>
-                  <Button variant="outline" onClick={() => { setShowGameSetup(null); setSelectedOpponent(null); }}>
+                  <Button variant="outline" onClick={() => { setShowGameSetup(null); setSelectedOpponent(null); setRoomName(''); }}>
                     Cancel
                   </Button>
                 </div>
@@ -699,7 +720,8 @@ const Dashboard: React.FC = () => {
                   <div key={invite.id} className="rounded-md bg-background/80 border border-border p-2.5">
                     <div className="flex items-center justify-between gap-2 mb-2">
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-foreground truncate">{invite.fromUsername}</div>
+                        <div className="text-sm font-medium text-foreground truncate">{invite.roomName ?? 'Arena Room'}</div>
+                        <div className="text-xs text-muted-foreground truncate">from {invite.fromUsername}</div>
                         <div className="text-xs text-muted-foreground">
                           {invite.boardSize}x{invite.boardSize} · {invite.boardTheme} · you play {invite.inviterColor === 'white' ? 'black' : 'white'}
                         </div>

@@ -12,46 +12,95 @@ export const pool = new Pool({
   password: process.env.DB_PASSWORD || 'checkers_password',
 });
 
+function inferCountryCode(countryName: string): string | null {
+  const normalized = countryName.trim().toLowerCase();
+  if (!normalized) return null;
+
+  try {
+    const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+    for (let first = 65; first <= 90; first += 1) {
+      for (let second = 65; second <= 90; second += 1) {
+        const code = String.fromCharCode(first, second);
+        const name = regionNames.of(code);
+        if (typeof name === 'string' && name.trim().toLowerCase() === normalized) {
+          return code;
+        }
+      }
+    }
+  } catch {
+    // Ignore Intl availability issues and fall back to null.
+  }
+
+  return null;
+}
+
 async function seedDemoUsers(): Promise<void> {
+  type DemoUserSeed = {
+    username: string;
+    password: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    birthday: string | null;
+    country: string | null;
+    countryCode: string | null;
+  };
+
+  const normalizeRequired = (value: string | undefined): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+
+  const makeCandidate = (index: 1 | 2): DemoUserSeed | null => {
+    const username = normalizeRequired(process.env[`DEMO_USER_${index}_USERNAME`]);
+    const password = normalizeRequired(process.env[`DEMO_USER_${index}_PASSWORD`]);
+    const firstName = normalizeRequired(process.env[`DEMO_USER_${index}_FIRST_NAME`]);
+    const lastName = normalizeRequired(process.env[`DEMO_USER_${index}_LAST_NAME`]);
+    const email = normalizeRequired(process.env[`DEMO_USER_${index}_EMAIL`]);
+    const birthday = normalizeRequired(process.env[`DEMO_USER_${index}_BIRTHDAY`]);
+    const country = normalizeRequired(process.env[`DEMO_USER_${index}_COUNTRY`]);
+
+    if (!username || !password || !firstName || !lastName || !email || !birthday || !country) {
+      return null;
+    }
+
+    const countryCode = inferCountryCode(country);
+
+    return { username, password, firstName, lastName, email, birthday, country, countryCode };
+  };
+
   const candidates = [
-    {
-      username: process.env.DEMO_USER_1_USERNAME,
-      password: process.env.DEMO_USER_1_PASSWORD,
-      firstName: 'Demo',
-      lastName: 'One',
-    },
-    {
-      username: process.env.DEMO_USER_2_USERNAME,
-      password: process.env.DEMO_USER_2_PASSWORD,
-      firstName: 'Demo',
-      lastName: 'Two',
-    },
-  ].filter(
-    user =>
-      typeof user.username === 'string' &&
-      user.username.trim().length > 0 &&
-      typeof user.password === 'string' &&
-      user.password.trim().length > 0,
-  ) as Array<{ username: string; password: string; firstName: string; lastName: string }>;
+    makeCandidate(1),
+    makeCandidate(2),
+  ].filter((user): user is DemoUserSeed => user !== null);
 
   for (const user of candidates) {
-    const username = user.username.trim();
-    const email = `${username.toLowerCase()}@demo.local`;
     const passwordHash = await bcrypt.hash(user.password, 12);
 
     await pool.query(
       `INSERT INTO users
-         (username, email, password_hash, first_name, last_name, country, country_code, is_online)
+         (username, email, password_hash, first_name, last_name, birthday, country, country_code, is_online)
        VALUES
-         ($1, $2, $3, $4, $5, $6, $7, false)
+         ($1, $2, $3, $4, $5, $6::date, $7, $8, false)
        ON CONFLICT (username) DO UPDATE
        SET email = EXCLUDED.email,
            password_hash = EXCLUDED.password_hash,
            first_name = EXCLUDED.first_name,
            last_name = EXCLUDED.last_name,
+           birthday = EXCLUDED.birthday,
            country = EXCLUDED.country,
            country_code = EXCLUDED.country_code`,
-      [username, email, passwordHash, user.firstName, user.lastName, 'Unknown', 'UN'],
+      [
+        user.username,
+        user.email,
+        passwordHash,
+        user.firstName,
+        user.lastName,
+        user.birthday,
+        user.country,
+        user.countryCode,
+      ],
     );
   }
 }
@@ -97,6 +146,7 @@ export async function initDb(): Promise<void> {
       id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       from_user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       to_user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      room_name      VARCHAR(80),
       board_size     INTEGER NOT NULL,
       board_theme    VARCHAR(20) NOT NULL,
       inviter_color  VARCHAR(10) NOT NULL,
@@ -118,11 +168,15 @@ export async function initDb(): Promise<void> {
     ALTER TABLE game_invites
       ADD COLUMN IF NOT EXISTS match_id UUID;
 
+    ALTER TABLE game_invites
+      ADD COLUMN IF NOT EXISTS room_name VARCHAR(80);
+
     CREATE TABLE IF NOT EXISTS game_matches (
       id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       invite_id             UUID UNIQUE REFERENCES game_invites(id) ON DELETE SET NULL,
       white_user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       black_user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      room_name             VARCHAR(80),
       board_size            INTEGER NOT NULL,
       board_theme           VARCHAR(20) NOT NULL,
       status                VARCHAR(20) NOT NULL DEFAULT 'active',
@@ -146,11 +200,32 @@ export async function initDb(): Promise<void> {
     ALTER TABLE game_matches
       ADD COLUMN IF NOT EXISTS state_revision INTEGER NOT NULL DEFAULT 0;
 
+    ALTER TABLE game_matches
+      ADD COLUMN IF NOT EXISTS room_name VARCHAR(80);
+
     CREATE INDEX IF NOT EXISTS idx_game_matches_active_by_white
       ON game_matches(white_user_id, status, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_game_matches_active_by_black
       ON game_matches(black_user_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS game_match_moves (
+      id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      match_id              UUID NOT NULL REFERENCES game_matches(id) ON DELETE CASCADE,
+      move_index            INTEGER NOT NULL,
+      move_notation         TEXT NOT NULL,
+      mover_color           VARCHAR(10),
+      elapsed_white_seconds INTEGER,
+      elapsed_black_seconds INTEGER,
+      state_revision        INTEGER NOT NULL,
+      payload               JSONB,
+      moved_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (match_id, move_index),
+      CHECK (mover_color IS NULL OR mover_color IN ('white', 'black'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_game_match_moves_match_id
+      ON game_match_moves(match_id, move_index);
   `);
 
   await seedDemoUsers();

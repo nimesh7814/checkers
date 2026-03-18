@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User } from '@/types/game';
 import { apiFetch, getToken, setToken, clearToken } from '@/lib/api';
+import { setSoundEnabled } from '@/lib/sounds';
 
 interface AuthResult {
   success: boolean;
@@ -53,6 +54,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .catch(() => clearToken())
       .finally(() => setLoading(false));
   }, []);
+
+  // Keep sound engine in sync with current authenticated user's preference.
+  useEffect(() => {
+    setSoundEnabled(user?.preferences?.soundEnabled ?? true);
+  }, [user?.preferences?.soundEnabled]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthResult> => {
     try {

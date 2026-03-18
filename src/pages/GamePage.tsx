@@ -33,9 +33,21 @@ interface SyncedGameState {
   moveHistory: string[];
   capturedWhite: number;
   capturedBlack: number;
+  timer: {
+    white: number;
+    black: number;
+  };
   gameOver: boolean;
   winner: PieceColor | 'draw' | null;
   forcedContinuationPiece: Position | null;
+}
+
+const INITIAL_COUNTDOWN_SECONDS = 600;
+
+function createInitialTimer(isMultiplayer: boolean) {
+  return isMultiplayer
+    ? { white: 0, black: 0 }
+    : { white: INITIAL_COUNTDOWN_SECONDS, black: INITIAL_COUNTDOWN_SECONDS };
 }
 
 const GamePage: React.FC = () => {
@@ -53,7 +65,7 @@ const GamePage: React.FC = () => {
     opponent?: User;
   } | null;
 
-  const gameType = state?.gameType ?? 'ai';
+  const gameType = state?.gameType ?? 'multiplayer';
   const aiDifficulty = state?.aiDifficulty ?? 'moderate';
   const playerColor = state?.playerColor ?? 'white';
   const boardTheme = state?.boardTheme ?? 'classic';
@@ -72,8 +84,10 @@ const GamePage: React.FC = () => {
   const [capturedBlack, setCapturedBlack] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [winner, setWinner] = useState<PieceColor | 'draw' | null>(null);
-  const [timer, setTimer] = useState({ white: 600, black: 600 });
+  const [timer, setTimer] = useState(() => createInitialTimer(isMultiplayer));
   const [forcedContinuationPiece, setForcedContinuationPiece] = useState<Position | null>(null);
+  const [opponentDisconnectedAt, setOpponentDisconnectedAt] = useState<string | null>(null);
+  const [opponentDisconnectDeadlineAt, setOpponentDisconnectDeadlineAt] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [matchSaved, setMatchSaved] = useState(false);
   const gameStartTime = useRef(Date.now());
@@ -83,7 +97,12 @@ const GamePage: React.FC = () => {
   const syncRevisionRef = useRef(0);
   const hasLoadedRemoteStateRef = useRef(false);
   const skipNextSyncPushRef = useRef(false);
+  const timerRef = useRef(timer);
   const socketRef = useRef<Socket | null>(null);
+
+  useEffect(() => {
+    timerRef.current = timer;
+  }, [timer]);
 
   const applySyncedGameState = useCallback((nextState: SyncedGameState) => {
     skipNextSyncPushRef.current = true;
@@ -92,6 +111,7 @@ const GamePage: React.FC = () => {
     setMoveHistory(nextState.moveHistory);
     setCapturedWhite(nextState.capturedWhite);
     setCapturedBlack(nextState.capturedBlack);
+    setTimer(nextState.timer ?? createInitialTimer(true));
     setGameOver(nextState.gameOver);
     setWinner(nextState.winner);
     setForcedContinuationPiece(nextState.forcedContinuationPiece);
@@ -123,6 +143,9 @@ const GamePage: React.FC = () => {
   }, [isMultiplayer, matchId, navigate, state, toast, user]);
 
   const applyServerMatchState = useCallback((serverMatch: MultiplayerMatchState) => {
+    setOpponentDisconnectedAt(serverMatch.opponentDisconnectedAt);
+    setOpponentDisconnectDeadlineAt(serverMatch.opponentDisconnectDeadlineAt);
+
     if (serverMatch.status === 'finished' && serverMatch.winnerColor && !timeoutWinnerAppliedRef.current) {
       timeoutWinnerAppliedRef.current = true;
       setGameOver(true);
@@ -307,6 +330,7 @@ const GamePage: React.FC = () => {
       moveHistory,
       capturedWhite,
       capturedBlack,
+      timer: timerRef.current,
       gameOver,
       winner,
       forcedContinuationPiece,
@@ -314,15 +338,35 @@ const GamePage: React.FC = () => {
 
     void apiFetch<{ stateRevision: number }>(`/matches/${matchId}/state`, {
       method: 'PUT',
-      body: JSON.stringify({ state: statePayload }),
+      body: JSON.stringify({
+        state: statePayload,
+        expectedRevision: syncRevisionRef.current,
+      }),
     })
       .then(data => {
         syncRevisionRef.current = data.stateRevision;
       })
-      .catch(() => {
-        // Ignore transient sync write failures; next polling cycle will reconcile.
+      .catch(async (error: unknown) => {
+        if (error instanceof Error && error.message.includes('State out of sync')) {
+          try {
+            const latest = await apiFetch<{
+              stateRevision: number;
+              gameState: SyncedGameState | null;
+            }>(`/matches/${matchId}/state`);
+            syncRevisionRef.current = latest.stateRevision;
+            if (latest.gameState) {
+              applySyncedGameState(latest.gameState);
+            }
+          } catch {
+            // Ignore transient reconciliation failures; polling will eventually recover.
+          }
+          return;
+        }
+
+        // Ignore transient sync write failures; polling cycle will reconcile.
       });
   }, [
+    applySyncedGameState,
     board,
     capturedBlack,
     capturedWhite,
@@ -377,18 +421,25 @@ const GamePage: React.FC = () => {
   // Timer
   useEffect(() => {
     if (gameOver) return;
+
     const interval = setInterval(() => {
       setTimer(prev => {
+        if (isMultiplayer) {
+          return { ...prev, [currentTurn]: prev[currentTurn] + 1 };
+        }
+
         const updated = { ...prev, [currentTurn]: prev[currentTurn] - 1 };
         if (updated[currentTurn] <= 0) {
           setGameOver(true);
           setWinner(currentTurn === 'white' ? 'black' : 'white');
         }
+
         return updated;
       });
     }, 1000);
+
     return () => clearInterval(interval);
-  }, [currentTurn, gameOver]);
+  }, [currentTurn, gameOver, isMultiplayer]);
 
   // Save match when game ends
   useEffect(() => {
@@ -723,18 +774,43 @@ const GamePage: React.FC = () => {
     setCapturedBlack(0);
     setGameOver(false);
     setWinner(null);
-    setTimer({ white: 600, black: 600 });
+    setTimer(createInitialTimer(isMultiplayer));
   };
 
-  if (redirecting || !user) return null;
+  if (redirecting || !user || !state) return null;
 
   const userCountryCode = user.countryCode;
   const isFlipped = playerColor === 'black';
+  const disconnectElapsedSeconds = opponentDisconnectedAt
+    ? Math.max(0, Math.floor((Date.now() - new Date(opponentDisconnectedAt).getTime()) / 1000))
+    : null;
+  const disconnectRemainingSeconds = opponentDisconnectedAt
+    ? Math.max(
+      0,
+      opponentDisconnectDeadlineAt
+        ? Math.floor((new Date(opponentDisconnectDeadlineAt).getTime() - Date.now()) / 1000)
+        : 600 - (disconnectElapsedSeconds ?? 0),
+    )
+    : null;
 
   const PlayerCard: React.FC<{
     name: string; flag: React.ReactNode; avatar: string | null; color: PieceColor;
-    timeLeft: number; captured: number; isCurrentTurn: boolean;
-  }> = ({ name, flag, avatar, color, timeLeft, captured, isCurrentTurn }) => (
+    timeValue: number; captured: number; isCurrentTurn: boolean;
+    showDisconnectStatus?: boolean;
+    disconnectElapsedSeconds?: number | null;
+    disconnectRemainingSeconds?: number | null;
+  }> = ({
+    name,
+    flag,
+    avatar,
+    color,
+    timeValue,
+    captured,
+    isCurrentTurn,
+    showDisconnectStatus = false,
+    disconnectElapsedSeconds = null,
+    disconnectRemainingSeconds = null,
+  }) => (
     <div className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors shrink-0 ${
       isCurrentTurn ? 'bg-accent border border-primary/30' : 'bg-card'
     }`}>
@@ -748,11 +824,16 @@ const GamePage: React.FC = () => {
           <div className={`w-2.5 h-2.5 rounded-full ${color === 'white' ? 'bg-neutral-200' : 'bg-neutral-800 border border-border'}`} />
           <span>Captured: {captured}</span>
         </div>
+        {showDisconnectStatus && disconnectElapsedSeconds !== null && disconnectRemainingSeconds !== null && (
+          <div className="text-[11px] text-amber-700 leading-tight mt-1">
+            Disconnected: {formatTime(disconnectElapsedSeconds)} elapsed, {formatTime(disconnectRemainingSeconds)} left
+          </div>
+        )}
       </div>
       <div className={`font-mono text-base tabular-nums font-bold ${
-        timeLeft <= 30 ? 'text-destructive' : 'text-foreground'
+        !isMultiplayer && timeValue <= 30 ? 'text-destructive' : 'text-foreground'
       }`}>
-        {formatTime(timeLeft)}
+        {formatTime(timeValue)}
       </div>
     </div>
   );
@@ -760,19 +841,26 @@ const GamePage: React.FC = () => {
   return (
     <div className="h-[100dvh] bg-background flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="border-b border-border bg-card px-3 py-1.5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
+      <header className="border-b border-border bg-card px-2 sm:px-3 py-1.5 shrink-0">
+        <div className="flex items-center justify-between gap-2">
           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate('/dashboard')}>
             <ArrowLeft className="w-4 h-4" />
           </Button>
-          <Crown className="w-4 h-4 text-primary" />
-          <span className="text-sm font-medium text-foreground">
+          <div className="flex items-center gap-2 min-w-0">
+            <Crown className="w-4 h-4 text-primary shrink-0" />
+            <span className="text-xs sm:text-sm font-medium text-foreground truncate">
             {gameType === 'ai' ? `vs AI (${aiDifficulty})` : 'vs Player'}
-          </span>
+            </span>
+          </div>
+          <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="capitalize">{boardTheme}</span>
+            <span>·</span>
+            <span>{currentTurn === playerColor ? 'Your Turn' : "Opponent's Turn"}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="sm:hidden mt-1 text-[11px] text-muted-foreground">
           <span className="capitalize">{boardTheme}</span>
-          <span>·</span>
+          <span className="mx-1">·</span>
           <span>{currentTurn === playerColor ? 'Your Turn' : "Opponent's Turn"}</span>
         </div>
       </header>
@@ -790,9 +878,12 @@ const GamePage: React.FC = () => {
                 : '🌍'}
               avatar={gameType === 'ai' ? null : (opponent?.avatar ?? null)}
               color={aiColor}
-              timeLeft={timer[aiColor]}
+              timeValue={timer[aiColor]}
               captured={aiColor === 'white' ? capturedBlack : capturedWhite}
               isCurrentTurn={currentTurn === aiColor}
+              showDisconnectStatus={isMultiplayer && !!opponentDisconnectedAt}
+              disconnectElapsedSeconds={disconnectElapsedSeconds}
+              disconnectRemainingSeconds={disconnectRemainingSeconds}
             />
           </div>
 
@@ -817,7 +908,7 @@ const GamePage: React.FC = () => {
               flag={<CountryFlag code={userCountryCode} className="h-4 w-6" title={user.country} />}
               avatar={user.avatar}
               color={playerColor}
-              timeLeft={timer[playerColor]}
+              timeValue={timer[playerColor]}
               captured={playerColor === 'white' ? capturedBlack : capturedWhite}
               isCurrentTurn={currentTurn === playerColor}
             />
@@ -905,9 +996,12 @@ const GamePage: React.FC = () => {
                 : '🌍'}
               avatar={gameType === 'ai' ? null : (opponent?.avatar ?? null)}
               color={aiColor}
-              timeLeft={timer[aiColor]}
+              timeValue={timer[aiColor]}
               captured={aiColor === 'white' ? capturedBlack : capturedWhite}
               isCurrentTurn={currentTurn === aiColor}
+              showDisconnectStatus={isMultiplayer && !!opponentDisconnectedAt}
+              disconnectElapsedSeconds={disconnectElapsedSeconds}
+              disconnectRemainingSeconds={disconnectRemainingSeconds}
             />
           </div>
 
@@ -918,7 +1012,7 @@ const GamePage: React.FC = () => {
               flag={<CountryFlag code={userCountryCode} className="h-4 w-6" title={user.country} />}
               avatar={user.avatar}
               color={playerColor}
-              timeLeft={timer[playerColor]}
+              timeValue={timer[playerColor]}
               captured={playerColor === 'white' ? capturedBlack : capturedWhite}
               isCurrentTurn={currentTurn === playerColor}
             />

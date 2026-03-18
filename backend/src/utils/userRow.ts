@@ -1,5 +1,12 @@
 // Converts a raw DB row into the User shape the frontend expects.
 export function userRow(row: Record<string, unknown>) {
+  const rawBirthday = row.birthday;
+  const birthday = rawBirthday instanceof Date
+    ? rawBirthday.toISOString().slice(0, 10)
+    : typeof rawBirthday === 'string'
+      ? rawBirthday.slice(0, 10)
+      : null;
+
   const gp = (row.games_played as number) || 0;
   const wins = (row.wins as number) || 0;
   return {
@@ -8,7 +15,7 @@ export function userRow(row: Record<string, unknown>) {
     email:       row.email || '',
     firstName:   row.first_name,
     lastName:    row.last_name,
-    birthday:    row.birthday ?? null,
+    birthday,
     avatar:      row.avatar ?? null,
     country:     row.country ?? '',
     countryCode: row.country_code ?? '',

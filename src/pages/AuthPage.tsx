@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth, RegisterData } from '@/contexts/AuthContext';
+import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,6 +10,48 @@ import { countries } from '@/data/countries';
 import ImageUpload from '@/components/ImageUpload';
 import CountryFlag from '@/components/CountryFlag';
 import { Crown, Eye, EyeOff, ChevronDown } from 'lucide-react';
+
+type AvailabilityStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'error';
+
+type AvailabilityState = {
+  status: AvailabilityStatus;
+  message: string;
+};
+
+type AvailabilityResponse = {
+  username?: {
+    available: boolean;
+    message: string;
+  };
+  email?: {
+    available: boolean;
+    message: string;
+  };
+};
+
+const USERNAME_HINT = 'Use 4 or more characters. Letters, numbers, and underscores only.';
+const EMAIL_HINT = 'Use a unique email address that you can access.';
+
+function validateUsername(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Required';
+  if (trimmed.length < 4) return 'Username must be at least 4 characters';
+  if (!/^[a-zA-Z0-9_]+$/.test(trimmed)) return 'Use only letters, numbers, and underscores';
+  return null;
+}
+
+function validateEmail(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return 'Required';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return 'Invalid email address';
+  return null;
+}
+
+function getAvailabilityClassName(status: AvailabilityStatus): string {
+  if (status === 'available') return 'text-emerald-600';
+  if (status === 'taken' || status === 'invalid' || status === 'error') return 'text-destructive';
+  return 'text-muted-foreground';
+}
 
 /* ─── Virtualized Country List ─── */
 const ITEM_HEIGHT = 36;
@@ -82,6 +125,14 @@ const AuthPage: React.FC = () => {
   const [showRegPass, setShowRegPass] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
   const [showCountryDropdown, setShowCountryDropdown] = useState(false);
+  const [usernameAvailability, setUsernameAvailability] = useState<AvailabilityState>({
+    status: 'idle',
+    message: USERNAME_HINT,
+  });
+  const [emailAvailability, setEmailAvailability] = useState<AvailabilityState>({
+    status: 'idle',
+    message: EMAIL_HINT,
+  });
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -99,6 +150,91 @@ const AuthPage: React.FC = () => {
   const filteredCountries = countries.filter(c =>
     c.name.toLowerCase().includes(countrySearch.toLowerCase())
   );
+
+  useEffect(() => {
+    if (mode !== 'register') return;
+
+    const username = regData.username.trim();
+    const email = regData.email.trim();
+    const usernameValidation = username ? validateUsername(username) : null;
+    const emailValidation = email ? validateEmail(email) : null;
+    const params = new URLSearchParams();
+    const controller = new AbortController();
+
+    if (!username) {
+      setUsernameAvailability({ status: 'idle', message: USERNAME_HINT });
+    } else if (usernameValidation) {
+      setUsernameAvailability({ status: 'invalid', message: usernameValidation });
+    } else {
+      params.set('username', username);
+      setUsernameAvailability({ status: 'checking', message: 'Checking username availability...' });
+    }
+
+    if (!email) {
+      setEmailAvailability({ status: 'idle', message: EMAIL_HINT });
+    } else if (emailValidation) {
+      setEmailAvailability({ status: 'invalid', message: emailValidation });
+    } else {
+      params.set('email', email);
+      setEmailAvailability({ status: 'checking', message: 'Checking email availability...' });
+    }
+
+    if (!params.toString()) {
+      return () => controller.abort();
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void apiFetch<AvailabilityResponse>(`/auth/availability?${params.toString()}`, {
+        signal: controller.signal,
+      })
+        .then(result => {
+          if (result.username) {
+            setUsernameAvailability({
+              status: result.username.available ? 'available' : 'taken',
+              message: result.username.message,
+            });
+          }
+
+          if (result.email) {
+            setEmailAvailability({
+              status: result.email.available ? 'available' : 'taken',
+              message: result.email.message,
+            });
+          }
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') return;
+
+          if (params.has('username')) {
+            setUsernameAvailability({
+              status: 'error',
+              message: 'Could not verify username right now',
+            });
+          }
+          if (params.has('email')) {
+            setEmailAvailability({
+              status: 'error',
+              message: 'Could not verify email right now',
+            });
+          }
+        });
+    }, 350);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [mode, regData.email, regData.username]);
+
+  const registerBlockedByAvailability =
+    usernameAvailability.status === 'checking' ||
+    emailAvailability.status === 'checking' ||
+    usernameAvailability.status === 'invalid' ||
+    emailAvailability.status === 'invalid' ||
+    usernameAvailability.status === 'taken' ||
+    emailAvailability.status === 'taken' ||
+    usernameAvailability.status === 'error' ||
+    emailAvailability.status === 'error';
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,7 +258,8 @@ const AuthPage: React.FC = () => {
     if (!regData.firstName.trim()) errors.firstName = 'Required';
     if (!regData.lastName.trim()) errors.lastName = 'Required';
     if (!regData.username.trim()) errors.username = 'Required';
-    else if (regData.username.length < 3) errors.username = 'Min 3 characters';
+    else if (regData.username.trim().length < 4) errors.username = 'Min 4 characters';
+    else if (!/^[a-zA-Z0-9_]+$/.test(regData.username.trim())) errors.username = 'Use only letters, numbers, and underscores';
     if (!regData.email.trim()) errors.email = 'Required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regData.email)) errors.email = 'Invalid email';
     if (!regData.password) errors.password = 'Required';
@@ -130,6 +267,12 @@ const AuthPage: React.FC = () => {
     if (regData.password !== regConfirmPass) errors.confirmPassword = 'Passwords do not match';
     if (!regData.birthday) errors.birthday = 'Required';
     if (!regData.countryCode) errors.country = 'Required';
+    if (usernameAvailability.status === 'taken' || usernameAvailability.status === 'error') {
+      errors.username = usernameAvailability.message;
+    }
+    if (emailAvailability.status === 'taken' || emailAvailability.status === 'error') {
+      errors.email = emailAvailability.message;
+    }
     setRegErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -144,8 +287,12 @@ const AuthPage: React.FC = () => {
       navigate('/dashboard');
     } else {
       const msg = result.error ?? 'Registration failed';
-      if (msg.toLowerCase().includes('username') || msg.toLowerCase().includes('email')) {
+      if (msg.toLowerCase().includes('email')) {
+        setRegErrors({ email: msg });
+        setEmailAvailability({ status: 'taken', message: msg });
+      } else if (msg.toLowerCase().includes('username')) {
         setRegErrors({ username: msg });
+        setUsernameAvailability({ status: 'taken', message: msg });
       } else {
         setRegErrors({ username: msg });
       }
@@ -280,11 +427,20 @@ const AuthPage: React.FC = () => {
                     id="register-email"
                     type="email"
                     value={regData.email}
-                    onChange={e => setRegData(d => ({ ...d, email: e.target.value }))}
+                    onChange={e => {
+                      const value = e.target.value;
+                      setRegData(d => ({ ...d, email: value }));
+                      setRegErrors(current => {
+                        const next = { ...current };
+                        delete next.email;
+                        return next;
+                      });
+                    }}
                     className="mt-1 bg-secondary border-border text-foreground"
                     placeholder="you@example.com"
                   />
                   {regErrors.email && <p className="text-xs text-destructive mt-1">{regErrors.email}</p>}
+                  <p className={`text-xs mt-1 ${getAvailabilityClassName(emailAvailability.status)}`}>{emailAvailability.message}</p>
                 </div>
 
                 <div>
@@ -292,10 +448,19 @@ const AuthPage: React.FC = () => {
                   <Input
                     id="register-username"
                     value={regData.username}
-                    onChange={e => setRegData(d => ({ ...d, username: e.target.value }))}
+                    onChange={e => {
+                      const value = e.target.value;
+                      setRegData(d => ({ ...d, username: value }));
+                      setRegErrors(current => {
+                        const next = { ...current };
+                        delete next.username;
+                        return next;
+                      });
+                    }}
                     className="mt-1 bg-secondary border-border text-foreground"
                   />
                   {regErrors.username && <p className="text-xs text-destructive mt-1">{regErrors.username}</p>}
+                  <p className={`text-xs mt-1 ${getAvailabilityClassName(usernameAvailability.status)}`}>{usernameAvailability.message}</p>
                 </div>
 
                 <div>
@@ -387,8 +552,8 @@ const AuthPage: React.FC = () => {
                   {regErrors.country && <p className="text-xs text-destructive mt-1">{regErrors.country}</p>}
                 </div>
 
-                <Button type="submit" className="w-full" disabled={submitting}>
-                  {submitting ? 'Creating account…' : 'Create Account'}
+                <Button type="submit" className="w-full" disabled={submitting || registerBlockedByAvailability}>
+                  {submitting ? 'Creating account…' : registerBlockedByAvailability ? 'Resolve username/email issues' : 'Create Account'}
                 </Button>
               </motion.form>
             )}

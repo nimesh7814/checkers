@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -10,6 +10,19 @@ import ImageUpload from '@/components/ImageUpload';
 import { countries } from '@/data/countries';
 import { BoardTheme, PieceColor } from '@/types/game';
 import { ArrowLeft, Save, Sun, Moon, User, Palette } from 'lucide-react';
+import { setSoundEnabled as applySoundPreference } from '@/lib/sounds';
+
+function normalizeDateForInput(value?: string | null): string {
+  if (!value) return '';
+  return value.slice(0, 10);
+}
+
+function resolveCountryCode(countryCode?: string, countryName?: string): string {
+  if (countryCode?.trim()) return countryCode;
+  if (!countryName?.trim()) return '';
+  const found = countries.find(c => c.name.toLowerCase() === countryName.toLowerCase());
+  return found?.code ?? '';
+}
 
 const SettingsPage: React.FC = () => {
   const { user, updateProfile } = useAuth();
@@ -20,17 +33,32 @@ const SettingsPage: React.FC = () => {
   const [firstName, setFirstName] = useState(user?.firstName ?? '');
   const [lastName, setLastName] = useState(user?.lastName ?? '');
   const [email, setEmail] = useState(user?.email ?? '');
-  const [birthday, setBirthday] = useState(user?.birthday ?? '');
+  const [birthday, setBirthday] = useState(normalizeDateForInput(user?.birthday));
   const [country, setCountry] = useState(user?.country ?? '');
-  const [countryCode, setCountryCode] = useState(user?.countryCode ?? '');
+  const [countryCode, setCountryCode] = useState(resolveCountryCode(user?.countryCode, user?.country));
   const [boardTheme, setBoardTheme] = useState<BoardTheme>(user?.preferences.boardTheme ?? 'classic');
   const [checkerColor, setCheckerColor] = useState<PieceColor>(user?.preferences.checkerColor ?? 'white');
   const [soundEnabled, setSoundEnabled] = useState(user?.preferences.soundEnabled ?? true);
   const [animationsEnabled, setAnimationsEnabled] = useState(user?.preferences.animationsEnabled ?? true);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const isMountedRef = useRef(true);
 
   if (!user) { navigate('/'); return null; }
+
+  useEffect(() => {
+    setAvatar(user.avatar ?? null);
+    setFirstName(user.firstName ?? '');
+    setLastName(user.lastName ?? '');
+    setEmail(user.email ?? '');
+    setBirthday(normalizeDateForInput(user.birthday));
+    setCountry(user.country ?? '');
+    setCountryCode(resolveCountryCode(user.countryCode, user.country));
+    setBoardTheme(user.preferences.boardTheme ?? 'classic');
+    setCheckerColor(user.preferences.checkerColor ?? 'white');
+    setSoundEnabled(user.preferences.soundEnabled ?? true);
+    setAnimationsEnabled(user.preferences.animationsEnabled ?? true);
+  }, [user]);
 
   const handleCountryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = countries.find(c => c.code === e.target.value);
@@ -40,7 +68,13 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleSoundToggle = (enabled: boolean) => {
+    setSoundEnabled(enabled);
+    applySoundPreference(enabled);
+  };
+
   const handleSave = async () => {
+    setSaved(false);
     setSaving(true);
     try {
       await updateProfile({
@@ -53,12 +87,25 @@ const SettingsPage: React.FC = () => {
         countryCode,
         preferences: { boardTheme, checkerColor, soundEnabled, animationsEnabled },
       });
+      if (!isMountedRef.current) return;
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } finally {
       setSaving(false);
+
+      await new Promise(resolve => window.setTimeout(resolve, 1500));
+      if (!isMountedRef.current) return;
+      navigate('/dashboard');
+    } finally {
+      if (isMountedRef.current) {
+        setSaving(false);
+      }
     }
   };
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -189,7 +236,7 @@ const SettingsPage: React.FC = () => {
 
           <div className="flex items-center justify-between">
             <Label className="text-foreground">Sound Effects</Label>
-            <Switch checked={soundEnabled} onCheckedChange={setSoundEnabled} />
+            <Switch checked={soundEnabled} onCheckedChange={handleSoundToggle} />
           </div>
 
           <div className="flex items-center justify-between">

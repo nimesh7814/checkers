@@ -4,7 +4,7 @@ services:
   # ── PostgreSQL database ──────────────────────────────────────────────────
   db:
     container_name: checkers-db
-    image: postgres:16-alpine
+    image: public.ecr.aws/docker/library/postgres:16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB:       "${POSTGRES_DB:-checkers}"
@@ -25,6 +25,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    ports:
+      - "3001:3001"
     environment:
       DB_HOST:      "${DB_HOST:-db}"
       DB_PORT:      "${DB_PORT:-5432}"
@@ -35,8 +37,18 @@ services:
       PORT:         "${PORT:-3001}"
       CORS_ORIGIN:  "${CORS_ORIGIN:-http://localhost:8036}"
       DEMO_USER_1_USERNAME: "${DEMO_USER_1_USERNAME:-}"
+      DEMO_USER_1_FIRST_NAME: "${DEMO_USER_1_FIRST_NAME:-}"
+      DEMO_USER_1_LAST_NAME: "${DEMO_USER_1_LAST_NAME:-}"
+      DEMO_USER_1_EMAIL: "${DEMO_USER_1_EMAIL:-}"
+      DEMO_USER_1_BIRTHDAY: "${DEMO_USER_1_BIRTHDAY:-}"
+      DEMO_USER_1_COUNTRY: "${DEMO_USER_1_COUNTRY:-}"
       DEMO_USER_1_PASSWORD: "${DEMO_USER_1_PASSWORD:-}"
       DEMO_USER_2_USERNAME: "${DEMO_USER_2_USERNAME:-}"
+      DEMO_USER_2_FIRST_NAME: "${DEMO_USER_2_FIRST_NAME:-}"
+      DEMO_USER_2_LAST_NAME: "${DEMO_USER_2_LAST_NAME:-}"
+      DEMO_USER_2_EMAIL: "${DEMO_USER_2_EMAIL:-}"
+      DEMO_USER_2_BIRTHDAY: "${DEMO_USER_2_BIRTHDAY:-}"
+      DEMO_USER_2_COUNTRY: "${DEMO_USER_2_COUNTRY:-}"
       DEMO_USER_2_PASSWORD: "${DEMO_USER_2_PASSWORD:-}"
     depends_on:
       db:
@@ -49,7 +61,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: /api
+        VITE_API_URL: "${VITE_API_URL:-/api}"
     restart: unless-stopped
     ports:
       - "8036:80"

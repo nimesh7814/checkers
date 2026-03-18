@@ -1,5 +1,4 @@
-# syntax=docker/dockerfile:1
-FROM node:20-alpine AS builder
+FROM public.ecr.aws/docker/library/node:20-alpine AS builder
 WORKDIR /app
 
 # Install dependencies first (cache layer)
@@ -12,9 +11,11 @@ ARG VITE_API_URL=/api
 ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
-# Production image: serve with nginx
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Production image: serve static build and proxy API/WebSocket to backend
+FROM public.ecr.aws/docker/library/node:20-alpine
+WORKDIR /app
+RUN npm install express http-proxy-middleware
+COPY --from=builder /app/dist ./dist
+COPY frontend-server.js ./frontend-server.js
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "frontend-server.js"]

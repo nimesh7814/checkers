@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { body, validationResult } from 'express-validator';
+import { randomBytes } from 'crypto';
 
 import { pool } from '../db';
 import { authenticate, AuthRequest } from '../middleware/authenticate';
@@ -8,10 +9,90 @@ const router = Router();
 
 type InviteStatus = 'pending' | 'accepted' | 'declined' | 'cancelled';
 
+const ROOM_ADJECTIVES = [
+  'Brave',
+  'Swift',
+  'Golden',
+  'Silent',
+  'Crimson',
+  'Arctic',
+  'Emerald',
+  'Shadow',
+  'Thunder',
+  'Iron',
+  'Mighty',
+  'Rapid',
+];
+
+const ROOM_ANIMALS = [
+  'Falcon',
+  'Tiger',
+  'Panther',
+  'Wolf',
+  'Leopard',
+  'Eagle',
+  'Fox',
+  'Lynx',
+  'Jaguar',
+  'Hawk',
+  'Otter',
+  'Stag',
+  'Bison',
+  'Puma',
+  'Cobra',
+  'Raven',
+];
+
+function normalizeRoomName(roomName: string): string {
+  return roomName.trim().replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function randomRoomCandidate(): string {
+  const adjective = ROOM_ADJECTIVES[Math.floor(Math.random() * ROOM_ADJECTIVES.length)];
+  const animal = ROOM_ANIMALS[Math.floor(Math.random() * ROOM_ANIMALS.length)];
+  const suffix = randomBytes(2).toString('hex').toUpperCase();
+  return `${adjective} ${animal} ${suffix}`;
+}
+
+async function roomNameExists(roomName: string): Promise<boolean> {
+  const inviteResult = await pool.query(
+    'SELECT 1 FROM game_invites WHERE LOWER(room_name) = LOWER($1) LIMIT 1',
+    [roomName],
+  );
+  if (inviteResult.rows.length > 0) return true;
+
+  const matchResult = await pool.query(
+    'SELECT 1 FROM game_matches WHERE LOWER(room_name) = LOWER($1) LIMIT 1',
+    [roomName],
+  );
+  return matchResult.rows.length > 0;
+}
+
+async function resolveRoomName(rawRoomName: string | undefined): Promise<string> {
+  if (typeof rawRoomName === 'string' && rawRoomName.trim().length > 0) {
+    const normalized = normalizeRoomName(rawRoomName);
+    const exists = await roomNameExists(normalized);
+    if (!exists) {
+      return normalized;
+    }
+  }
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const candidate = randomRoomCandidate();
+    const exists = await roomNameExists(candidate);
+    if (!exists) {
+      return candidate;
+    }
+  }
+
+  return `Arena ${Date.now()}`;
+}
+
 function mapInvite(row: Record<string, unknown>) {
   return {
     id: row.id as string,
     matchId: (row.match_id as string | null) ?? null,
+    roomName: (row.room_name as string | null) ?? null,
     fromUserId: row.from_user_id as string,
     toUserId: row.to_user_id as string,
     boardSize: row.board_size as number,
@@ -64,6 +145,12 @@ router.post(
   authenticate,
   [
     body('toUserId').isUUID(),
+    body('roomName')
+      .customSanitizer(value => (typeof value === 'string' && value.trim().length === 0 ? undefined : value))
+      .optional()
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 80 }),
     body('boardSize').isIn([8, 12]),
     body('boardTheme').isIn(['classic', 'wooden', 'metal']),
     body('inviterColor').isIn(['white', 'black']),
@@ -75,8 +162,9 @@ router.post(
       return;
     }
 
-    const { toUserId, boardSize, boardTheme, inviterColor } = req.body as {
+    const { toUserId, roomName, boardSize, boardTheme, inviterColor } = req.body as {
       toUserId: string;
+      roomName?: string;
       boardSize: 8 | 12;
       boardTheme: 'classic' | 'wooden' | 'metal';
       inviterColor: 'white' | 'black';
@@ -101,11 +189,13 @@ router.post(
         [req.userId, toUserId],
       );
 
+      const resolvedRoomName = await resolveRoomName(roomName);
+
       const { rows } = await pool.query(
-        `INSERT INTO game_invites (from_user_id, to_user_id, board_size, board_theme, inviter_color)\
-         VALUES ($1, $2, $3, $4, $5)\
+        `INSERT INTO game_invites (from_user_id, to_user_id, room_name, board_size, board_theme, inviter_color)\
+         VALUES ($1, $2, $3, $4, $5, $6)\
          RETURNING *`,
-        [req.userId, toUserId, boardSize, boardTheme, inviterColor],
+        [req.userId, toUserId, resolvedRoomName, boardSize, boardTheme, inviterColor],
       );
 
       const inviteId = rows[0].id as string;
@@ -197,13 +287,14 @@ router.patch(
           const blackUserId = inviterColor === 'white' ? lockedToUserId : lockedFromUserId;
 
           const matchInsert = await client.query(
-            `INSERT INTO game_matches (invite_id, white_user_id, black_user_id, board_size, board_theme)\
-             VALUES ($1, $2, $3, $4, $5)\
+            `INSERT INTO game_matches (invite_id, white_user_id, black_user_id, room_name, board_size, board_theme)\
+             VALUES ($1, $2, $3, $4, $5, $6)\
              RETURNING id`,
             [
               id,
               whiteUserId,
               blackUserId,
+              (lockedInvite.room_name as string | null) ?? null,
               lockedInvite.board_size as number,
               lockedInvite.board_theme as string,
             ],

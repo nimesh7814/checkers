@@ -1,10 +1,30 @@
 // Sound effects using Web Audio API synthesis — no external dependencies needed
 
 let audioCtx: AudioContext | null = null;
-let soundEnabled = true;
+const SOUND_ENABLED_STORAGE_KEY = 'checkers:sound-enabled';
+
+function readInitialSoundEnabled(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const stored = window.localStorage.getItem(SOUND_ENABLED_STORAGE_KEY);
+    if (stored === null) return true;
+    return stored === 'true';
+  } catch {
+    return true;
+  }
+}
+
+let soundEnabled = readInitialSoundEnabled();
 
 export function setSoundEnabled(enabled: boolean) {
   soundEnabled = enabled;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(SOUND_ENABLED_STORAGE_KEY, String(enabled));
+    } catch {
+      // Ignore storage write errors (e.g., private browsing restrictions)
+    }
+  }
 }
 
 function getCtx(): AudioContext | null {

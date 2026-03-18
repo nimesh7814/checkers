@@ -14,6 +14,7 @@ type MatchRow = {
   id: string;
   white_user_id: string;
   black_user_id: string;
+  room_name: string | null;
   board_size: number;
   board_theme: 'classic' | 'wooden' | 'metal';
   status: MatchStatus;
@@ -35,8 +36,90 @@ type MatchRow = {
   black_country_code: string;
 };
 
+type ClockSnapshot = {
+  white: number;
+  black: number;
+};
+
+type PersistedGameState = {
+  moveHistory?: unknown;
+  timer?: unknown;
+  gameOver?: unknown;
+  winner?: unknown;
+};
+
 function toIsoOrNull(value: string | null): string | null {
   return value ? new Date(value).toISOString() : null;
+}
+
+function toIntOrNull(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.floor(value));
+}
+
+function parseClockSnapshot(state: PersistedGameState | null): ClockSnapshot | null {
+  if (!state || typeof state !== 'object' || !state.timer || typeof state.timer !== 'object') {
+    return null;
+  }
+
+  const timer = state.timer as Record<string, unknown>;
+  const white = toIntOrNull(timer.white);
+  const black = toIntOrNull(timer.black);
+  if (white === null || black === null) return null;
+
+  return { white, black };
+}
+
+function parseMoveHistory(state: PersistedGameState | null): string[] {
+  if (!state || typeof state !== 'object' || !Array.isArray(state.moveHistory)) {
+    return [];
+  }
+
+  return state.moveHistory.filter(item => typeof item === 'string') as string[];
+}
+
+async function persistMoveHistoryDelta(
+  matchId: string,
+  previousState: PersistedGameState | null,
+  nextState: PersistedGameState,
+  stateRevision: number,
+): Promise<void> {
+  const previousMoves = parseMoveHistory(previousState);
+  const nextMoves = parseMoveHistory(nextState);
+  const startIndex = previousMoves.length;
+  if (nextMoves.length <= startIndex) return;
+
+  const timer = parseClockSnapshot(nextState);
+
+  for (let index = startIndex; index < nextMoves.length; index += 1) {
+    const moveIndex = index + 1;
+    const moveNotation = nextMoves[index];
+    const moverColor = moveIndex % 2 === 1 ? 'white' : 'black';
+
+    await pool.query(
+      `INSERT INTO game_match_moves
+         (match_id, move_index, move_notation, mover_color, elapsed_white_seconds, elapsed_black_seconds, state_revision, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       ON CONFLICT (match_id, move_index) DO NOTHING`,
+      [
+        matchId,
+        moveIndex,
+        moveNotation,
+        moverColor,
+        timer?.white ?? null,
+        timer?.black ?? null,
+        stateRevision,
+        JSON.stringify(nextState),
+      ],
+    );
+  }
+}
+
+function parseWinnerColor(state: PersistedGameState): 'white' | 'black' | null {
+  if (state.winner === 'white' || state.winner === 'black') {
+    return state.winner;
+  }
+  return null;
 }
 
 function mapMatch(row: MatchRow, userId: string) {
@@ -61,6 +144,7 @@ function mapMatch(row: MatchRow, userId: string) {
 
   return {
     id: row.id,
+    roomName: row.room_name,
     boardSize: row.board_size as 8 | 12,
     boardTheme: row.board_theme,
     status: row.status,
@@ -239,7 +323,7 @@ router.get('/:id/state', authenticate, async (req: AuthRequest, res: Response): 
 router.put(
   '/:id/state',
   authenticate,
-  [body('state').isObject()],
+  [body('state').isObject(), body('expectedRevision').optional().isInt({ min: 0 })],
   async (req: AuthRequest, res: Response): Promise<void> => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -258,24 +342,77 @@ router.put(
         return;
       }
 
-      const { state } = req.body as { state: Record<string, unknown> };
+      const { state, expectedRevision } = req.body as {
+        state: Record<string, unknown>;
+        expectedRevision?: number;
+      };
+
+      const effectiveExpectedRevision = typeof expectedRevision === 'number'
+        ? expectedRevision
+        : match.state_revision;
+
       const { rows } = await pool.query(
         `UPDATE game_matches
          SET game_state = $1::jsonb,
              state_revision = state_revision + 1,
              updated_at = NOW()
-         WHERE id = $2
+         WHERE id = $2 AND state_revision = $3
          RETURNING state_revision, game_state`,
-        [JSON.stringify(state), match.id],
+        [JSON.stringify(state), match.id, effectiveExpectedRevision],
       );
 
+      if (rows.length === 0) {
+        const latest = await fetchMatchWithUsers(match.id);
+        res.status(409).json({
+          error: 'State out of sync',
+          currentStateRevision: latest?.state_revision ?? match.state_revision,
+          gameState: latest?.game_state ?? match.game_state,
+        });
+        return;
+      }
+
+      const nextRevision = rows[0].state_revision as number;
+      await persistMoveHistoryDelta(
+        match.id,
+        (match.game_state as PersistedGameState | null) ?? null,
+        state as PersistedGameState,
+        nextRevision,
+      );
+
+      const persistedState = state as PersistedGameState;
+      if (persistedState.gameOver === true) {
+        const winnerColor = parseWinnerColor(persistedState);
+        const winnerUserId = winnerColor === 'white'
+          ? match.white_user_id
+          : winnerColor === 'black'
+            ? match.black_user_id
+            : null;
+
+        await pool.query(
+          `UPDATE game_matches
+           SET status = 'finished',
+               winner_user_id = $1,
+               winner_reason = 'completed',
+               ended_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $2 AND status = 'active'`,
+          [winnerUserId, match.id],
+        );
+
+        emitMatchMeta(match.id, {
+          status: 'finished',
+          winnerUserId,
+          winnerReason: 'completed',
+        });
+      }
+
       res.json({
-        stateRevision: rows[0].state_revision as number,
+        stateRevision: nextRevision,
         gameState: rows[0].game_state,
       });
 
       emitMatchState(match.id, {
-        stateRevision: rows[0].state_revision as number,
+        stateRevision: nextRevision,
         gameState: rows[0].game_state,
       });
     } catch (err) {
